@@ -8,7 +8,7 @@ from pynput import keyboard, mouse
 def serialize_key(key: keyboard.Key | keyboard.KeyCode) -> dict[str, Any]:
     if isinstance(key, keyboard.KeyCode):
         if key.char is not None:
-            return {"type": "char", "value": key.char}
+            return {"type": "char", "value": _normalize_recorded_char(key.char)}
         if key.vk is not None:
             return {"type": "vk", "value": key.vk}
 
@@ -23,7 +23,7 @@ def deserialize_key(data: dict[str, Any]) -> keyboard.Key | keyboard.KeyCode:
     value = data.get("value")
 
     if key_type == "char":
-        return keyboard.KeyCode.from_char(value)
+        return keyboard.KeyCode.from_char(_normalize_recorded_char(str(value)))
     if key_type == "vk":
         return keyboard.KeyCode.from_vk(int(value))
     if key_type == "special":
@@ -57,3 +57,18 @@ def _deserialize_repr_key(raw_value: str) -> keyboard.Key | keyboard.KeyCode:
         return keyboard.KeyCode.from_vk(int(raw_value))
 
     raise ValueError(f"Unsupported repr key payload: {raw_value!r}")
+
+
+def _normalize_recorded_char(value: str) -> str:
+    if len(value) != 1:
+        return value
+
+    code_point = ord(value)
+
+    # Windows low-level hooks may report Ctrl+A..Ctrl+Z as ASCII control
+    # characters (\x01..\x1a). Re-map them back to the printable base key so
+    # playback can reproduce combinations like Ctrl+C and Ctrl+V correctly.
+    if 1 <= code_point <= 26:
+        return chr(code_point + 96)
+
+    return value
