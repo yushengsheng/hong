@@ -14,6 +14,25 @@ from .models import MacroEvent, MacroScript, build_script
 
 
 class MacroRecorder:
+    _SHORTCUT_MODIFIER_NAMES = {
+        "ctrl",
+        "ctrl_l",
+        "ctrl_r",
+        "alt",
+        "alt_l",
+        "alt_r",
+        "alt_gr",
+        "cmd",
+        "cmd_l",
+        "cmd_r",
+    }
+
+    _ALL_MODIFIER_NAMES = _SHORTCUT_MODIFIER_NAMES | {
+        "shift",
+        "shift_l",
+        "shift_r",
+    }
+
     def __init__(
         self,
         *,
@@ -32,6 +51,7 @@ class MacroRecorder:
         self._start_time = 0.0
         self._recording_bounds: ScreenBounds | None = None
         self._pressed_buttons: dict[str, dict[str, object]] = {}
+        self._pressed_modifiers: set[str] = set()
         self._active = False
 
     @property
@@ -51,6 +71,7 @@ class MacroRecorder:
             self._events = []
 
         self._pressed_buttons = {}
+        self._pressed_modifiers = set()
         self._recording_bounds = get_screen_bounds()
         self._start_time = time.perf_counter()
 
@@ -85,6 +106,7 @@ class MacroRecorder:
             self._keyboard_listener = None
 
         self._pressed_buttons = {}
+        self._pressed_modifiers = set()
 
         with self._lock:
             events = list(self._events)
@@ -255,12 +277,51 @@ class MacroRecorder:
                 threading.Thread(target=self._on_stop_requested, daemon=True).start()
             return False
 
-        self._append_event("key_press", {"key": serialize_key(key)})
+        self._append_event(
+            "key_press",
+            {"key": serialize_key(key, prefer_vk=self._should_prefer_vk_for_key(key))},
+        )
+        self._update_pressed_modifiers(key, pressed=True)
         return None
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode) -> bool | None:
         if key == keyboard.Key.esc:
             return False
 
-        self._append_event("key_release", {"key": serialize_key(key)})
+        self._append_event(
+            "key_release",
+            {"key": serialize_key(key, prefer_vk=self._should_prefer_vk_for_key(key))},
+        )
+        self._update_pressed_modifiers(key, pressed=False)
+        return None
+
+    def _should_prefer_vk_for_key(self, key: keyboard.Key | keyboard.KeyCode) -> bool:
+        return isinstance(key, keyboard.KeyCode) and any(
+            name in self._SHORTCUT_MODIFIER_NAMES for name in self._pressed_modifiers
+        )
+
+    def _update_pressed_modifiers(
+        self,
+        key: keyboard.Key | keyboard.KeyCode,
+        *,
+        pressed: bool,
+    ) -> None:
+        modifier_name = self._modifier_name(key)
+        if modifier_name is None:
+            return
+
+        if pressed:
+            self._pressed_modifiers.add(modifier_name)
+            return
+
+        self._pressed_modifiers.discard(modifier_name)
+
+    def _modifier_name(self, key: keyboard.Key | keyboard.KeyCode) -> str | None:
+        if not isinstance(key, keyboard.Key):
+            return None
+
+        key_name = key.name
+        if key_name in self._ALL_MODIFIER_NAMES:
+            return key_name
+
         return None

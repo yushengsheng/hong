@@ -108,6 +108,70 @@ class ScriptIoTests(unittest.TestCase):
                 ["key_press", "key_press", "key_release", "key_release"],
             )
 
+    def test_text_round_trip_preserves_legacy_char_shortcut_sequence(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "legacy-shortcut.txt"
+            script = MacroScript(
+                name="legacy-shortcut",
+                created_at="2026-03-11T10:00:00+00:00",
+                screen_size=(1920, 1080),
+                events=[
+                    MacroEvent(0.0, "key_press", {"key": {"type": "special", "value": "ctrl_l"}}),
+                    MacroEvent(0.05, "key_press", {"key": {"type": "char", "value": "v"}}),
+                    MacroEvent(0.10, "key_release", {"key": {"type": "special", "value": "ctrl_l"}}),
+                    MacroEvent(0.15, "key_release", {"key": {"type": "char", "value": "v"}}),
+                ],
+            )
+
+            save_script(path, script)
+            loaded = load_script(path)
+
+            self.assertEqual(
+                [event.payload["key"] for event in loaded.events],
+                [
+                    {"type": "special", "value": "ctrl_l"},
+                    {"type": "char", "value": "v"},
+                    {"type": "special", "value": "ctrl_l"},
+                    {"type": "char", "value": "v"},
+                ],
+            )
+            self.assertEqual(
+                [event.kind for event in loaded.events],
+                ["key_press", "key_press", "key_release", "key_release"],
+            )
+
+    def test_json_round_trip_preserves_legacy_char_shortcut_sequence(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "legacy-shortcut.json"
+            script = MacroScript(
+                name="legacy-shortcut",
+                created_at="2026-03-11T10:00:00+00:00",
+                screen_size=(1920, 1080),
+                events=[
+                    MacroEvent(0.0, "key_press", {"key": {"type": "special", "value": "ctrl_l"}}),
+                    MacroEvent(0.05, "key_press", {"key": {"type": "char", "value": "V"}}),
+                    MacroEvent(0.10, "key_release", {"key": {"type": "special", "value": "ctrl_l"}}),
+                    MacroEvent(0.15, "key_release", {"key": {"type": "char", "value": "V"}}),
+                ],
+            )
+
+            save_script(path, script)
+            loaded = load_script(path)
+
+            self.assertEqual(
+                [event.payload["key"] for event in loaded.events],
+                [
+                    {"type": "special", "value": "ctrl_l"},
+                    {"type": "char", "value": "V"},
+                    {"type": "special", "value": "ctrl_l"},
+                    {"type": "char", "value": "V"},
+                ],
+            )
+            self.assertEqual(
+                [event.kind for event in loaded.events],
+                ["key_press", "key_press", "key_release", "key_release"],
+            )
+
     def test_text_round_trip_preserves_supported_special_keys(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "special-keys.txt"

@@ -7,11 +7,24 @@ import time
 from pynput import keyboard, mouse
 
 from .display import ScreenBounds, denormalize_point, get_screen_bounds, scale_point
-from .input_codec import deserialize_button, deserialize_key
+from .input_codec import deserialize_button, deserialize_key, virtual_key_from_char
 from .models import MacroEvent, MacroScript
 
 
 class MacroPlayer:
+    _SHORTCUT_MODIFIER_NAMES = {
+        "ctrl",
+        "ctrl_l",
+        "ctrl_r",
+        "alt",
+        "alt_l",
+        "alt_r",
+        "alt_gr",
+        "cmd",
+        "cmd_l",
+        "cmd_r",
+    }
+
     def __init__(self) -> None:
         self._keyboard = keyboard.Controller()
         self._mouse = mouse.Controller()
@@ -164,15 +177,17 @@ class MacroPlayer:
             return
 
         if event.kind == "key_press":
-            key = deserialize_key(payload["key"])
             key_id = json.dumps(payload["key"], sort_keys=True)
+            key = self._resolve_playback_key(payload["key"])
             self._keyboard.press(key)
             self._pressed_keys[key_id] = key
             return
 
         if event.kind == "key_release":
-            key = deserialize_key(payload["key"])
             key_id = json.dumps(payload["key"], sort_keys=True)
+            key = self._pressed_keys.get(key_id)
+            if key is None:
+                key = self._resolve_playback_key(payload["key"])
             self._keyboard.release(key)
             self._pressed_keys.pop(key_id, None)
             return
@@ -274,3 +289,17 @@ class MacroPlayer:
             except Exception:
                 pass
         self._pressed_buttons.clear()
+
+    def _resolve_playback_key(self, data: dict[str, object]) -> keyboard.Key | keyboard.KeyCode:
+        if data.get("type") == "char" and self._shortcut_modifier_active():
+            vk = virtual_key_from_char(str(data.get("value", "")))
+            if vk is not None:
+                return keyboard.KeyCode.from_vk(vk)
+
+        return deserialize_key(data)
+
+    def _shortcut_modifier_active(self) -> bool:
+        return any(
+            getattr(key, "name", None) in self._SHORTCUT_MODIFIER_NAMES
+            for key in self._pressed_keys.values()
+        )

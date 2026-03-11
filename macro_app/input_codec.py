@@ -1,14 +1,33 @@
 from __future__ import annotations
 
+import ctypes
+from ctypes import wintypes
 from typing import Any
 
 from pynput import keyboard, mouse
 
 
-def serialize_key(key: keyboard.Key | keyboard.KeyCode) -> dict[str, Any]:
+if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "user32"):
+    _VK_KEY_SCAN = ctypes.windll.user32.VkKeyScanW
+    _VK_KEY_SCAN.argtypes = (wintypes.WCHAR,)
+    _VK_KEY_SCAN.restype = ctypes.c_short
+else:
+    _VK_KEY_SCAN = None
+
+
+def serialize_key(
+    key: keyboard.Key | keyboard.KeyCode,
+    *,
+    prefer_vk: bool = False,
+) -> dict[str, Any]:
     if isinstance(key, keyboard.KeyCode):
         if key.char is not None:
-            return {"type": "char", "value": _normalize_recorded_char(key.char)}
+            normalized_char = _normalize_recorded_char(key.char)
+            if prefer_vk:
+                vk = key.vk if key.vk is not None else virtual_key_from_char(normalized_char)
+                if vk is not None:
+                    return {"type": "vk", "value": vk}
+            return {"type": "char", "value": normalized_char}
         if key.vk is not None:
             return {"type": "vk", "value": key.vk}
 
@@ -32,6 +51,23 @@ def deserialize_key(data: dict[str, Any]) -> keyboard.Key | keyboard.KeyCode:
         return _deserialize_repr_key(str(value))
 
     raise ValueError(f"Unsupported key payload: {data!r}")
+
+
+def virtual_key_from_char(value: str) -> int | None:
+    normalized_value = _normalize_recorded_char(value)
+    if len(normalized_value) != 1:
+        return None
+
+    if _VK_KEY_SCAN is not None:
+        result = int(_VK_KEY_SCAN(normalized_value))
+        if result != -1:
+            return result & 0xFF
+
+    upper_value = normalized_value.upper()
+    if upper_value.isascii() and upper_value.isalnum():
+        return ord(upper_value)
+
+    return None
 
 
 def serialize_button(button: mouse.Button) -> dict[str, str]:

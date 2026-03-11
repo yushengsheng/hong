@@ -4,7 +4,7 @@ import unittest
 
 from pynput import keyboard
 
-from macro_app.input_codec import deserialize_key, serialize_key
+from macro_app.input_codec import deserialize_key, serialize_key, virtual_key_from_char
 
 
 ROUND_TRIP_SPECIAL_KEYS = [
@@ -75,6 +75,10 @@ class InputCodecTests(unittest.TestCase):
         payload = serialize_key(keyboard.KeyCode.from_char("\x16"))
         self.assertEqual(payload, {"type": "char", "value": "v"})
 
+    def test_serialize_key_prefers_vk_when_requested_for_shortcut_key(self) -> None:
+        payload = serialize_key(keyboard.KeyCode(vk=86, char="V"), prefer_vk=True)
+        self.assertEqual(payload, {"type": "vk", "value": 86})
+
     def test_deserialize_key_restores_printable_char_keycode(self) -> None:
         key = deserialize_key({"type": "char", "value": "c"})
         self.assertIsInstance(key, keyboard.KeyCode)
@@ -92,6 +96,9 @@ class InputCodecTests(unittest.TestCase):
         key = deserialize_key({"type": "char", "value": "\x03"})
         self.assertIsInstance(key, keyboard.KeyCode)
         self.assertEqual(key.char, "c")
+
+    def test_virtual_key_from_char_maps_uppercase_shortcut_key(self) -> None:
+        self.assertEqual(virtual_key_from_char("V"), 86)
 
 
 if __name__ == "__main__":
