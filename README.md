@@ -396,7 +396,7 @@ pyinstaller --noconfirm --clean --distpath dist --workpath build release.spec
 dist/宏录制器/
 ```
 
-`release.spec` 会把 `macros/` 目录中的文件一并带入打包产物。
+`release.spec` 不会把本地 `macros/` 目录中的用户宏数据打进发布包。程序会在首次运行时自动创建 `macros/` 目录。
 
 ## GitHub Release 发布
 

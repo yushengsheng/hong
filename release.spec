@@ -4,15 +4,9 @@ from pathlib import Path
 
 
 project_root = Path(SPECPATH).resolve().parent
-macros_dir = project_root / "macros"
 
+# Runtime macros are user data. Do not bundle local macro files into releases.
 datas = []
-if macros_dir.exists():
-    for macro_file in macros_dir.rglob("*"):
-        if macro_file.is_file():
-            relative_parent = macro_file.relative_to(macros_dir).parent
-            target_dir = Path("macros") / relative_parent
-            datas.append((str(macro_file), str(target_dir)))
 
 
 a = Analysis(
