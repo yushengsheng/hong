@@ -1,0 +1,460 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+
+from .display import ScreenBounds, normalize_point
+from .models import MacroEvent, MacroScript, load_script as load_script_json, save_script as save_script_json
+
+
+TEXT_HEADER = "# 宏脚本文本格式 v4"
+TEXT_EVENTS_MARKER = "事件:"
+
+TEXT_MOUSE_TAP = "鼠标点击"
+TEXT_MOUSE_DRAG = "鼠标拖拽"
+TEXT_MOUSE_SCROLL = "鼠标滚轮"
+TEXT_KEY_PRESS = "键盘按下"
+TEXT_KEY_RELEASE = "键盘松开"
+
+BUTTON_LABELS = {
+    "left": "左键",
+    "right": "右键",
+    "middle": "中键",
+    "x1": "侧键1",
+    "x2": "侧键2",
+}
+BUTTON_NAMES = {value: key for key, value in BUTTON_LABELS.items()}
+
+PRESS_LABELS = {
+    True: "按下",
+    False: "松开",
+}
+PRESS_VALUES = {value: key for key, value in PRESS_LABELS.items()}
+
+VISIBLE_CHARACTERS = {
+    " ": "<空格>",
+    "\t": "<Tab>",
+    "\n": "<换行>",
+}
+VISIBLE_CHARACTER_VALUES = {value: key for key, value in VISIBLE_CHARACTERS.items()}
+
+
+def save_script(path: str | Path, script: MacroScript) -> None:
+    target = Path(path)
+    suffix = target.suffix.lower()
+
+    if not suffix:
+        target = target.with_suffix(".txt")
+        suffix = ".txt"
+
+    if suffix == ".json":
+        save_script_json(target, script)
+        return
+
+    if suffix == ".txt":
+        target.write_text(_script_to_text(script), encoding="utf-8")
+        return
+
+    raise ValueError("仅支持 .txt 或 .json 格式。")
+
+
+def load_script(path: str | Path) -> MacroScript:
+    source = Path(path)
+    suffix = source.suffix.lower()
+
+    if suffix == ".json":
+        return load_script_json(source)
+
+    if suffix == ".txt":
+        return _script_from_text(source.read_text(encoding="utf-8"), default_name=source.stem)
+
+    raw_text = source.read_text(encoding="utf-8")
+    if raw_text.lstrip().startswith("{"):
+        return MacroScript.from_dict(json.loads(raw_text))
+
+    return _script_from_text(raw_text, default_name=source.stem)
+
+
+def _script_to_text(script: MacroScript) -> str:
+    width, height = script.screen_size
+    left, top = script.screen_origin
+    visible_events = _simplify_events_for_text(script.events)
+
+    lines = [
+        TEXT_HEADER,
+        "# 每一行只保留一个动作节点，不写入鼠标移动轨迹。",
+        "# “间隔”表示距离上一条动作的等待秒数。",
+        "# “默认循环次数”和“默认播放速度”会在列表播放时直接生效。",
+        "# “全局快捷键”格式示例：Ctrl+Alt+1 / Ctrl+Shift+F2。",
+        "# “自定义排序”留空时按录制时间排序，填写数字时按数字从小到大排。",
+        "# 修改 x/y 后，加载时会自动重算比例坐标，方便跨 1K、2K、4K 屏幕适配。",
+        "# 键盘按键格式：字符:a / 特殊:enter / 虚拟键:13",
+        "",
+        f"名称: {script.name}",
+        f"创建时间: {script.created_at}",
+        f"版本: {script.version}",
+        f"屏幕尺寸: {width},{height}",
+        f"屏幕原点: {left},{top}",
+        f"默认循环次数: {script.default_loops}",
+        f"默认播放速度: {script.default_speed}",
+        f"全局快捷键: {script.global_hotkey}",
+        f"自定义排序: {'' if script.custom_order is None else script.custom_order}",
+        f"事件数: {len(visible_events)}",
+        "",
+        TEXT_EVENTS_MARKER,
+    ]
+
+    previous_offset = 0.0
+    for event in visible_events:
+        interval = max(event.time_offset - previous_offset, 0.0)
+        previous_offset = event.time_offset
+        lines.append(_event_to_text(event, interval=interval))
+
+    return "\n".join(lines) + "\n"
+
+
+def _script_from_text(text: str, *, default_name: str) -> MacroScript:
+    metadata: dict[str, str] = {}
+    event_lines: list[str] = []
+    in_events = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line == TEXT_EVENTS_MARKER:
+            in_events = True
+            continue
+
+        if not in_events:
+            key, separator, value = line.partition(":")
+            if not separator:
+                raise ValueError(f"无法解析头信息：{line}")
+            metadata[key.strip()] = value.strip()
+            continue
+
+        event_lines.append(line)
+
+    width, height = _parse_int_pair(metadata.get("屏幕尺寸", "0,0"), field_name="屏幕尺寸")
+    left, top = _parse_int_pair(metadata.get("屏幕原点", "0,0"), field_name="屏幕原点")
+    bounds = ScreenBounds(left=left, top=top, width=max(width, 1), height=max(height, 1))
+
+    events: list[MacroEvent] = []
+    current_time = 0.0
+    for line in event_lines:
+        event = _event_from_text(line, bounds=bounds, previous_time=current_time)
+        events.append(event)
+        current_time = event.time_offset
+
+    return MacroScript(
+        name=metadata.get("名称") or default_name,
+        created_at=metadata.get("创建时间") or datetime.now(timezone.utc).isoformat(),
+        screen_size=(width, height),
+        screen_origin=(left, top),
+        default_loops=int(metadata.get("默认循环次数", "1")),
+        default_speed=float(metadata.get("默认播放速度", "1.0")),
+        global_hotkey=metadata.get("全局快捷键", "").strip(),
+        custom_order=_parse_optional_int(metadata.get("自定义排序", "").strip()),
+        events=events,
+        version=int(metadata.get("版本", "4")),
+    )
+
+
+def _simplify_events_for_text(events: list[MacroEvent]) -> list[MacroEvent]:
+    simplified: list[MacroEvent] = []
+    index = 0
+
+    while index < len(events):
+        event = events[index]
+
+        if event.kind == "mouse_move":
+            index += 1
+            continue
+
+        if event.kind == "mouse_click" and "pressed" in event.payload:
+            collapsed_event, next_index = _collapse_legacy_mouse_action(events, index)
+            if collapsed_event is not None:
+                simplified.append(collapsed_event)
+            index = next_index
+            continue
+
+        simplified.append(event)
+        index += 1
+
+    return simplified
+
+
+def _collapse_legacy_mouse_action(events: list[MacroEvent], start_index: int) -> tuple[MacroEvent | None, int]:
+    start_event = events[start_index]
+    payload = start_event.payload
+
+    if not bool(payload.get("pressed")):
+        return None, start_index + 1
+
+    button_name = payload["button"]["name"]
+    start_x = int(payload["x"])
+    start_y = int(payload["y"])
+    end_x = start_x
+    end_y = start_y
+    duration = 0.0
+    moved = False
+
+    for index in range(start_index + 1, len(events)):
+        current_event = events[index]
+
+        if current_event.kind == "mouse_move":
+            end_x = int(current_event.payload["x"])
+            end_y = int(current_event.payload["y"])
+            moved = True
+            continue
+
+        if current_event.kind == "mouse_click" and current_event.payload["button"]["name"] == button_name:
+            if bool(current_event.payload.get("pressed")):
+                break
+
+            end_x = int(current_event.payload["x"])
+            end_y = int(current_event.payload["y"])
+            duration = max(current_event.time_offset - start_event.time_offset, 0.0)
+
+            if moved or end_x != start_x or end_y != start_y:
+                return (
+                    MacroEvent(
+                        time_offset=start_event.time_offset,
+                        kind="mouse_drag",
+                        payload={
+                            "start_x": start_x,
+                            "start_y": start_y,
+                            "end_x": end_x,
+                            "end_y": end_y,
+                            "button": {"name": button_name},
+                            "duration": duration,
+                        },
+                    ),
+                    index + 1,
+                )
+
+            return (
+                MacroEvent(
+                    time_offset=start_event.time_offset,
+                    kind="mouse_tap",
+                    payload={
+                        "x": end_x,
+                        "y": end_y,
+                        "button": {"name": button_name},
+                    },
+                ),
+                index + 1,
+            )
+
+        break
+
+    return (
+        MacroEvent(
+            time_offset=start_event.time_offset,
+            kind="mouse_tap",
+            payload={
+                "x": start_x,
+                "y": start_y,
+                "button": {"name": button_name},
+            },
+        ),
+        start_index + 1,
+    )
+
+
+def _event_to_text(event: MacroEvent, *, interval: float) -> str:
+    parts = [f"间隔={interval:.6f}"]
+    payload = event.payload
+
+    if event.kind == "mouse_tap":
+        parts.append(TEXT_MOUSE_TAP)
+        parts.append(f"x={int(payload['x'])}")
+        parts.append(f"y={int(payload['y'])}")
+        parts.append(f"按键={_button_to_text(payload['button']['name'])}")
+        return " | ".join(parts)
+
+    if event.kind == "mouse_drag":
+        parts.append(TEXT_MOUSE_DRAG)
+        parts.append(f"起点x={int(payload['start_x'])}")
+        parts.append(f"起点y={int(payload['start_y'])}")
+        parts.append(f"终点x={int(payload['end_x'])}")
+        parts.append(f"终点y={int(payload['end_y'])}")
+        parts.append(f"按键={_button_to_text(payload['button']['name'])}")
+        parts.append(f"耗时={float(payload.get('duration', 0.12)):.6f}")
+        return " | ".join(parts)
+
+    if event.kind == "mouse_scroll":
+        parts.append(TEXT_MOUSE_SCROLL)
+        parts.append(f"x={int(payload['x'])}")
+        parts.append(f"y={int(payload['y'])}")
+        parts.append(f"横向={int(payload['dx'])}")
+        parts.append(f"纵向={int(payload['dy'])}")
+        return " | ".join(parts)
+
+    if event.kind == "key_press":
+        parts.append(TEXT_KEY_PRESS)
+        parts.append(f"按键={_key_to_text(payload['key'])}")
+        return " | ".join(parts)
+
+    if event.kind == "key_release":
+        parts.append(TEXT_KEY_RELEASE)
+        parts.append(f"按键={_key_to_text(payload['key'])}")
+        return " | ".join(parts)
+
+    if event.kind == "mouse_click":
+        parts.append(TEXT_MOUSE_TAP)
+        parts.append(f"x={int(payload['x'])}")
+        parts.append(f"y={int(payload['y'])}")
+        parts.append(f"按键={_button_to_text(payload['button']['name'])}")
+        parts.append(f"动作={PRESS_LABELS[bool(payload['pressed'])]}")
+        return " | ".join(parts)
+
+    raise ValueError(f"不支持导出此事件类型：{event.kind}")
+
+
+def _event_from_text(line: str, *, bounds: ScreenBounds, previous_time: float) -> MacroEvent:
+    parts = [part.strip() for part in line.split("|")]
+    if len(parts) < 2:
+        raise ValueError(f"无法解析事件行：{line}")
+
+    first_part = parts[0]
+    if first_part.startswith("间隔="):
+        interval = float(first_part.split("=", 1)[1].strip())
+        time_offset = previous_time + interval
+        kind_label = parts[1]
+        field_parts = parts[2:]
+    else:
+        time_offset = float(first_part)
+        kind_label = parts[1]
+        field_parts = parts[2:]
+
+    fields = _parse_fields(field_parts)
+
+    if kind_label == TEXT_MOUSE_TAP:
+        if "动作" in fields:
+            payload = _pointer_payload_from_fields(fields, bounds=bounds)
+            payload["button"] = {"name": _button_from_text(fields["按键"])}
+            payload["pressed"] = PRESS_VALUES[fields["动作"]]
+            return MacroEvent(time_offset=time_offset, kind="mouse_click", payload=payload)
+
+        payload = _pointer_payload_from_fields(fields, bounds=bounds)
+        payload["button"] = {"name": _button_from_text(fields["按键"])}
+        return MacroEvent(time_offset=time_offset, kind="mouse_tap", payload=payload)
+
+    if kind_label == TEXT_MOUSE_DRAG:
+        payload = _drag_payload_from_fields(fields, bounds=bounds)
+        payload["button"] = {"name": _button_from_text(fields["按键"])}
+        payload["duration"] = float(fields.get("耗时", "0.12"))
+        return MacroEvent(time_offset=time_offset, kind="mouse_drag", payload=payload)
+
+    if kind_label == TEXT_MOUSE_SCROLL:
+        payload = _pointer_payload_from_fields(fields, bounds=bounds)
+        payload["dx"] = int(fields["横向"])
+        payload["dy"] = int(fields["纵向"])
+        return MacroEvent(time_offset=time_offset, kind="mouse_scroll", payload=payload)
+
+    if kind_label == TEXT_KEY_PRESS:
+        return MacroEvent(time_offset=time_offset, kind="key_press", payload={"key": _key_from_text(fields["按键"])})
+
+    if kind_label == TEXT_KEY_RELEASE:
+        return MacroEvent(time_offset=time_offset, kind="key_release", payload={"key": _key_from_text(fields["按键"])})
+
+    raise ValueError(f"不支持的事件类型：{kind_label}")
+
+
+def _pointer_payload_from_fields(fields: dict[str, str], *, bounds: ScreenBounds) -> dict[str, object]:
+    x = int(fields["x"])
+    y = int(fields["y"])
+    normalized_x, normalized_y = normalize_point(x, y, bounds)
+
+    return {
+        "x": x,
+        "y": y,
+        "normalized_x": normalized_x,
+        "normalized_y": normalized_y,
+    }
+
+
+def _drag_payload_from_fields(fields: dict[str, str], *, bounds: ScreenBounds) -> dict[str, object]:
+    start_x = int(fields["起点x"])
+    start_y = int(fields["起点y"])
+    end_x = int(fields["终点x"])
+    end_y = int(fields["终点y"])
+    start_normalized_x, start_normalized_y = normalize_point(start_x, start_y, bounds)
+    end_normalized_x, end_normalized_y = normalize_point(end_x, end_y, bounds)
+
+    return {
+        "start_x": start_x,
+        "start_y": start_y,
+        "end_x": end_x,
+        "end_y": end_y,
+        "start_normalized_x": start_normalized_x,
+        "start_normalized_y": start_normalized_y,
+        "end_normalized_x": end_normalized_x,
+        "end_normalized_y": end_normalized_y,
+    }
+
+
+def _parse_fields(parts: list[str]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in parts:
+        key, separator, value = part.partition("=")
+        if not separator:
+            raise ValueError(f"无法解析字段：{part}")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+def _parse_int_pair(raw_value: str, *, field_name: str) -> tuple[int, int]:
+    left_text, separator, right_text = raw_value.partition(",")
+    if not separator:
+        raise ValueError(f"{field_name} 格式应为 a,b")
+    return int(left_text.strip()), int(right_text.strip())
+
+
+def _parse_optional_int(raw_value: str) -> int | None:
+    if not raw_value:
+        return None
+    return int(raw_value)
+
+
+def _button_to_text(name: str) -> str:
+    return BUTTON_LABELS.get(name, name)
+
+
+def _button_from_text(value: str) -> str:
+    return BUTTON_NAMES.get(value, value)
+
+
+def _key_to_text(data: dict[str, object]) -> str:
+    key_type = str(data["type"])
+    value = data["value"]
+
+    if key_type == "char":
+        char_value = str(value)
+        return f"字符:{VISIBLE_CHARACTERS.get(char_value, char_value)}"
+    if key_type == "special":
+        return f"特殊:{value}"
+    if key_type == "vk":
+        return f"虚拟键:{value}"
+
+    return f"原样:{value}"
+
+
+def _key_from_text(value: str) -> dict[str, object]:
+    prefix, separator, payload = value.partition(":")
+    if not separator:
+        raise ValueError(f"无法解析按键：{value}")
+
+    if prefix == "字符":
+        return {"type": "char", "value": VISIBLE_CHARACTER_VALUES.get(payload, payload)}
+    if prefix == "特殊":
+        return {"type": "special", "value": payload}
+    if prefix == "虚拟键":
+        return {"type": "vk", "value": int(payload)}
+    if prefix == "原样":
+        return {"type": "repr", "value": payload}
+
+    raise ValueError(f"不支持的按键格式：{value}")
