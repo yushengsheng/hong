@@ -1,57 +1,441 @@
-# Macro Recorder MVP
+# 宏录制器
 
-This project is a Windows desktop MVP for recording keyboard and mouse input
-and replaying it in loops.
+这是一个面向 Windows 的桌面宏录制工具 MVP，用来录制键盘和鼠标操作，并按设定次数或无限循环回放。
 
-## Features
+项目目前已经具备日常可用的基础能力：全局录制、自动保存、宏列表管理、TXT/JSON 脚本、全局快捷键、拖拽排序、分辨率缩放适配，以及 Windows 打包发布流程。
 
-- Global mouse and keyboard recording
-- Save and load macros as JSON or editable TXT files
-- TXT scripts store only action nodes and the interval between them
-- Replay with loop count and speed multiplier
-- `Esc` stops recording
-- Per-macro global hotkeys with combo-key support
-- Drag-to-reorder macro list with persistent custom ordering
-- Basic coordinate scaling when screen resolution changes
-- Automatic DPI-aware coordinate handling on Windows high-DPI displays
-- Recorded macros are automatically saved and listed in the app
-- Playback can be interrupted with `Esc`
-- Macro files are stored under `macros/`
+## 主要功能
 
-## Limitations
+- 录制全局键盘和鼠标输入
+- 录制结束后自动保存到 `macros/`
+- 支持播放单个宏，并按默认循环次数与默认速度回放
+- 录制时按 `Esc` 停止并自动保存
+- 播放时按 `Esc` 中断
+- 支持为每个宏设置全局快捷键
+- 支持拖拽调整宏列表顺序，并持久化保存
+- 支持保存为 `.txt` 或 `.json`
+- 支持用记事本直接编辑文本宏脚本
+- 在屏幕分辨率变化时自动按比例换算坐标
+- 自动启用 Windows DPI 感知，减少高分屏坐标偏移
 
-- It records input events, not video
-- Raw coordinates are still sensitive to window position changes
-- Elevated windows, games, or anti-cheat protected apps may ignore replayed input
-- The current MVP does not support image matching or conditional branches
-- Macros recorded before the DPI fix should be recorded again on high-DPI systems
+## 适用场景
 
-## Run
+- 重复点击、输入、滚轮、回车等桌面操作
+- 固定流程的表单录入
+- 固定窗口位置下的重复界面操作
+- 需要给常用宏绑定全局快捷键快速触发
 
-```powershell
-python main.py
-```
+## 当前限制
 
-Double-click `start_macro_recorder.vbs` for a no-console launch on Windows.
+- 录制的是输入事件，不是视频
+- 仍然依赖坐标，目标窗口位置变化过大时可能影响结果
+- 提权窗口、游戏、带反作弊的软件，可能忽略模拟输入
+- 不支持图像识别、条件判断、分支逻辑
+- 旧版高 DPI 修复之前录制的宏，建议重新录制
 
-## Install
+## 运行环境
+
+- 操作系统：Windows
+- Python：建议使用与工作流一致的 `Python 3.13`
+- 依赖：
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-## Test
+当前项目只有一个运行依赖：
+
+```text
+pynput>=1.7,<2.0
+```
+
+## 快速开始
+
+### 1. 安装依赖
+
+```powershell
+pip install -r requirements.txt
+```
+
+### 2. 启动程序
+
+开发环境直接运行：
+
+```powershell
+python main.py
+```
+
+如果想在 Windows 上无控制台启动，可以双击：
+
+```text
+start_macro_recorder.vbs
+```
+
+如果使用打包后的版本，直接运行生成目录中的 `宏录制器.exe` 即可。
+
+## 首次启动会发生什么
+
+- 程序会自动创建 `macros/` 目录
+- 新录制的宏默认保存为 `.txt` 文本脚本
+- 如果项目根目录下存在旧版遗留的宏文件（`.txt` 或 `.json`），程序会自动迁移到 `macros/`
+- 启动后界面底部日志会显示当前屏幕分辨率和缩放信息，例如 `3840x2160 @ 150%`
+
+## 界面说明
+
+主界面分为三个区域：
+
+- 控制区：开始录制、停止录制、停止播放、窗口置顶
+- 宏列表：显示已保存宏，支持播放、设置、拖拽排序
+- 日志区：显示录制、播放、保存、热键冲突、错误等信息
+
+宏列表每一项会显示：
+
+- 宏名称
+- 事件数
+- 默认循环次数
+- 默认播放速度
+- 当前状态，例如“当前”“播放中”
+- 实际文件名
+
+## 详细使用流程
+
+### 录制一个新宏
+
+1. 点击“开始录制”。
+2. 程序会先倒计时 3 秒。
+3. 在倒计时期间切换到目标窗口。
+4. 倒计时结束后开始录制你的鼠标和键盘操作。
+5. 完成后按 `Esc`，或者点击“停止录制”。
+6. 宏会自动保存到 `macros/`，文件名类似 `宏-20260311-123456.txt`。
+
+录制时有几点要注意：
+
+- 鼠标点击本程序窗口本身不会被录进去，避免把控制面板操作混进宏里
+- 键盘按下和松开都会记录
+- 鼠标拖拽会记录为一个“拖拽动作”，不是密集的移动轨迹
+- 鼠标滚轮会记录滚动位置和滚动方向
+
+### 播放一个宏
+
+1. 在宏列表找到目标宏。
+2. 点击该行的 `▶` 按钮。
+3. 程序会按这个宏的默认循环次数和默认播放速度执行。
+4. 播放期间按 `Esc`，或者点击“停止播放”，可以立即中断。
+
+播放行为说明：
+
+- `默认循环次数 = 1` 表示播放一次
+- `默认循环次数 = 0` 表示无限循环
+- `默认播放速度 = 1.0` 表示原速
+- `默认播放速度 = 2.0` 表示两倍速
+- `默认播放速度 = 0.5` 表示半速
+
+### 调整宏顺序
+
+宏列表左侧有拖拽手柄 `⋮⋮`。
+
+- 按住手柄拖动
+- 释放后会自动保存新的顺序
+- 排序信息会写回宏文件中的 `自定义排序`
+
+### 修改宏设置
+
+点击宏右侧的 `⚙` 按钮，会打开“宏设置”窗口，可以修改：
+
+- 宏名称
+- 默认循环次数
+- 默认播放速度
+- 全局快捷键
+
+设置窗口还支持：
+
+- “编辑脚本”：直接用记事本打开宏文件
+- “删除宏”：删除当前宏文件
+
+保存设置时的规则：
+
+- 宏名称不能为空
+- 循环次数必须是整数，且不能小于 0
+- 播放速度必须是数字，且必须大于 0
+- 如果修改了宏名称，程序会同步重命名文件
+- 如果快捷键与其他宏冲突，保存会被拒绝
+
+## 全局快捷键说明
+
+每个宏都可以配置一个全局快捷键，程序启动后会自动监听。
+
+规则如下：
+
+- 至少要有一个修饰键：`Ctrl`、`Alt`、`Shift`、`Win`
+- 只能有一个主键
+- 不允许重复按键
+- 不同宏不能使用同一个快捷键
+- 录制或播放过程中，即使按下快捷键也会被忽略
+
+可用主键包括：
+
+- 字母和数字，例如 `A`、`1`
+- 功能键，例如 `F2`、`F12`
+- 特殊键，例如 `Esc`、`Tab`、`Space`、`Enter`
+- 导航键，例如 `Home`、`End`、`PgUp`、`PgDn`、方向键
+
+示例：
+
+```text
+Ctrl+Alt+1
+Ctrl+Shift+F2
+Alt+Enter
+Win+F8
+```
+
+不合法示例：
+
+```text
+1
+Ctrl+Alt+1+2
+Ctrl+Ctrl+1
+```
+
+## 宏文件存放位置
+
+所有宏文件默认保存在：
+
+```text
+macros/
+```
+
+程序会自动扫描这个目录下的 `.txt` 和 `.json` 文件，并显示在列表中。
+
+## 宏脚本格式
+
+项目支持两种格式：
+
+- `.txt`：适合人工查看和手工修改
+- `.json`：适合程序处理和完整数据保存
+
+### TXT 文本格式特点
+
+- 文件头带元信息
+- 每行只保留一个动作节点
+- 使用“间隔”表示相邻动作之间等待了多少秒
+- 不保存鼠标移动轨迹
+- 拖拽会保存成单独的 `鼠标拖拽` 动作
+- 修改坐标后，重新加载时会自动计算归一化坐标，便于不同分辨率下尽量保持比例位置
+
+一个简化示例：
+
+```text
+# 宏脚本文本格式 v4
+
+名称: 测试
+创建时间: 2026-03-11T02:42:21.774130+00:00
+版本: 4
+屏幕尺寸: 3840,2160
+屏幕原点: 0,0
+默认循环次数: 1
+默认播放速度: 1.0
+全局快捷键: Alt+1
+自定义排序:
+事件数: 4
+
+事件:
+间隔=1.840526 | 鼠标点击 | x=2270 | y=1184 | 按键=左键
+间隔=0.829159 | 键盘按下 | 按键=字符:1
+间隔=0.101211 | 键盘松开 | 按键=字符:1
+间隔=3.309330 | 键盘按下 | 按键=特殊:enter
+```
+
+### 事件类型
+
+当前文本格式中常见的事件有：
+
+- `鼠标点击`
+- `鼠标拖拽`
+- `鼠标滚轮`
+- `键盘按下`
+- `键盘松开`
+
+### 按键文本写法
+
+文本脚本里的键盘按键通常写成以下形式：
+
+```text
+字符:a
+特殊:enter
+虚拟键:13
+```
+
+可见字符也支持特殊显示：
+
+```text
+字符:<空格>
+字符:<Tab>
+字符:<换行>
+```
+
+### JSON 格式说明
+
+JSON 会保存完整结构化数据，核心字段包括：
+
+- `name`
+- `created_at`
+- `screen_size`
+- `screen_origin`
+- `default_loops`
+- `default_speed`
+- `global_hotkey`
+- `custom_order`
+- `events`
+- `version`
+
+如果你需要自己生成或批量处理宏，建议使用 JSON。
+
+## 分辨率与 DPI 适配
+
+项目在录制时会保存：
+
+- 录制时的屏幕尺寸
+- 录制时的虚拟屏幕原点
+- 每个坐标点的归一化比例坐标
+
+播放时会根据当前屏幕重新计算坐标，因此：
+
+- 从 1080p 换到 2K、4K 时，通常仍然可以工作
+- 但如果目标窗口位置变了，或者布局变化很大，仍然可能点错位置
+
+更稳妥的使用方式：
+
+- 录制和播放时尽量保持相同窗口位置
+- 高 DPI 系统上尽量重新录制一次关键宏
+- 对坐标敏感的流程，优先在固定分辨率和固定窗口布局下使用
+
+## 常见问题
+
+### 1. 为什么我点击了“开始录制”，没有马上开始？
+
+程序设计上会先倒计时 3 秒，给你切换目标窗口的时间。
+
+### 2. 为什么停止录制后没有生成宏？
+
+如果本次没有捕获到任何动作节点，程序不会保存空宏。
+
+### 3. 为什么宏播放没有效果？
+
+可能原因包括：
+
+- 目标窗口没有处于正确位置
+- 当前软件或窗口需要管理员权限
+- 目标程序拦截了模拟输入
+- 录制和播放的分辨率差异太大
+
+### 4. 为什么设置的快捷键没有响应？
+
+检查以下几项：
+
+- 程序是否仍在运行
+- 快捷键是否和其他宏冲突
+- 录制或播放是否正在进行
+- 快捷键是否至少包含一个修饰键
+
+### 5. `start_macro_recorder.vbs` 启动失败怎么办？
+
+如果无控制台启动失败，项目根目录会生成：
+
+```text
+launch-error.log
+```
+
+可以先查看这个文件里的异常信息。
+
+## 目录结构
+
+```text
+.
+├─ .github/workflows/release.yml    GitHub Actions 发布流程
+├─ launch.pyw                       无控制台启动入口
+├─ main.py                          开发运行入口
+├─ macro_app/                       主程序代码
+├─ macros/                          宏文件目录
+├─ tests/                           单元测试
+├─ release.spec                     PyInstaller 打包配置
+├─ requirements.txt                 运行依赖
+└─ start_macro_recorder.vbs         Windows 双击启动脚本
+```
+
+## 开发与测试
+
+运行测试：
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-## Release
+当前测试主要覆盖：
 
-Push a tag like `v0.1.0` to trigger the GitHub Actions workflow that builds the
-Windows executable and publishes a GitHub Release.
+- TXT/JSON 脚本读写
+- 全局快捷键解析
+- 宏列表排序与事务性保存逻辑
+
+## 本地打包
+
+先安装打包工具：
+
+```powershell
+pip install pyinstaller
+```
+
+然后执行：
+
+```powershell
+pyinstaller --noconfirm --clean --distpath dist --workpath build release.spec
+```
+
+打包结果会输出到：
+
+```text
+dist/宏录制器/
+```
+
+`release.spec` 会把 `macros/` 目录中的文件一并带入打包产物。
+
+## GitHub Release 发布
+
+仓库已经配置 GitHub Actions 工作流：
+
+```text
+.github/workflows/release.yml
+```
+
+发布方式有两种：
+
+### 方式一：推送版本标签
 
 ```powershell
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+工作流会自动：
+
+- 安装依赖
+- 运行测试
+- 使用 PyInstaller 构建 Windows 可执行文件
+- 打包为 zip
+- 创建或更新 GitHub Release
+
+### 方式二：手动触发工作流
+
+在 GitHub Actions 页面手动运行 `Build Windows Release`，并传入：
+
+```text
+release_tag = v0.1.0
+```
+
+## 适合继续扩展的方向
+
+- 增加导入/导出按钮
+- 增加单步调试或预览
+- 增加录制过滤器，例如忽略某些按键
+- 增加图像识别与条件判断
+- 增加宏分组和搜索
+- 增加管理员权限启动提示
