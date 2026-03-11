@@ -68,8 +68,8 @@ class MacroApp:
 
         self.root = tk.Tk()
         self.root.title("宏录制器")
-        self.root.geometry("480x420")
-        self.root.minsize(400, 420)
+        self.root.geometry("560x460")
+        self.root.minsize(460, 420)
         self.ui_fonts = self._configure_ui_fonts()
         self.always_on_top_var = tk.BooleanVar(master=self.root, value=False)
         self._control_layout_mode = "wide"
@@ -434,6 +434,7 @@ class MacroApp:
 
     def _on_macro_canvas_configure(self, event: tk.Event[tk.Canvas]) -> None:
         self.macro_canvas.itemconfigure(self.macro_window_id, width=event.width)
+        self._refresh_macro_row_layouts(event.width)
 
     def _on_macro_mouse_wheel(self, event: tk.Event[tk.Canvas]) -> str | None:
         if not self.macro_items or not self._is_pointer_over_widget(self.macro_canvas):
@@ -650,7 +651,7 @@ class MacroApp:
             return
 
         for item in self.macro_items:
-            row = ttk.Frame(self.macro_body, padding=(6, 5))
+            row = ttk.Frame(self.macro_body, padding=(8, 8))
             row.pack(fill=tk.X)
             row.columnconfigure(0, weight=1)
 
@@ -661,50 +662,59 @@ class MacroApp:
                 tags.append("播放中")
 
             info_parts = [
-                f"事件数：{len(item.script.events)}",
-                f"循环：{self._format_loops(item.script.default_loops)}",
-                f"速度：{item.script.default_speed:g}x",
+                f"事件 {len(item.script.events)}",
+                f"循环 {self._format_loops(item.script.default_loops)}",
+                f"速度 {item.script.default_speed:g}x",
             ]
             if tags:
-                info_parts.append(" / ".join(tags))
+                info_parts.append(f"状态 {' / '.join(tags)}")
 
-            header_frame = ttk.Frame(row)
-            header_frame.grid(row=0, column=0, sticky=tk.EW)
+            content_frame = ttk.Frame(row)
+            content_frame.grid(row=0, column=0, sticky=tk.EW, padx=(0, 12))
+            content_frame.columnconfigure(0, weight=1)
 
-            title_label = ttk.Label(header_frame, text=item.script.name, font=self.ui_fonts.title)
-            title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            buttons_frame = ttk.Frame(row)
+            buttons_frame.grid(row=0, column=1, sticky=tk.NE)
 
-            buttons_frame = ttk.Frame(header_frame)
-            buttons_frame.pack(side=tk.RIGHT, padx=(8, 0))
+            title_label = ttk.Label(content_frame, text=item.script.name, font=self.ui_fonts.title, anchor=tk.W)
+            title_label.grid(row=0, column=0, sticky=tk.EW)
 
             drag_handle = tk.Label(
                 buttons_frame,
-                text="⋮⋮",
+                text="排序",
                 font=self.ui_fonts.small,
                 fg="#64748b",
                 cursor="fleur",
+                padx=4,
+                pady=1,
             )
             drag_handle.pack(side=tk.LEFT, padx=(0, 4))
             drag_handle.bind("<ButtonPress-1>", lambda event, path=item.path: self._start_macro_drag(event, path))
 
-            play_button = ttk.Button(buttons_frame, text="▶", width=3, command=lambda path=item.path: self.play_macro(path))
+            play_button = ttk.Button(
+                buttons_frame,
+                text="播放",
+                width=5,
+                command=lambda path=item.path: self.play_macro(path),
+            )
             settings_button = ttk.Button(
                 buttons_frame,
-                text="⚙",
-                width=3,
+                text="设置",
+                width=5,
                 command=lambda path=item.path: self.open_macro_settings(path),
             )
             play_button.pack(side=tk.LEFT, padx=(0, 4))
             settings_button.pack(side=tk.LEFT)
 
+            detail_text = f"{'  ·  '.join(info_parts)}\n文件：{item.path.name}"
             detail_label = ttk.Label(
-                row,
-                text=f"{' | '.join(info_parts)} | 文件：{item.path.name}",
+                content_frame,
+                text=detail_text,
                 font=self.ui_fonts.small,
                 justify=tk.LEFT,
-                wraplength=390,
+                anchor=tk.W,
             )
-            detail_label.grid(row=1, column=0, sticky=tk.EW, pady=(3, 0))
+            detail_label.grid(row=1, column=0, sticky=tk.EW, pady=(4, 0))
 
             self.macro_row_controls.append(
                 {
@@ -713,6 +723,10 @@ class MacroApp:
                     "drag": drag_handle,
                     "path": item.path,
                     "row": row,
+                    "title": title_label,
+                    "detail": detail_label,
+                    "title_text": item.script.name,
+                    "detail_text": detail_text,
                 }
             )
 
@@ -720,6 +734,43 @@ class MacroApp:
             separator.pack(fill=tk.X, pady=(0, 2))
 
         self.root.after_idle(self._sync_macro_list_layout)
+
+    def _refresh_macro_row_layouts(self, width: int | None = None) -> None:
+        if not self.macro_row_controls:
+            return
+
+        text_width = self._get_macro_text_wraplength(width)
+        title_width = max(text_width, 140)
+
+        for row_controls in self.macro_row_controls:
+            title_label = row_controls.get("title")
+            detail_label = row_controls.get("detail")
+            title_text = str(row_controls.get("title_text", ""))
+            detail_text = str(row_controls.get("detail_text", ""))
+
+            if isinstance(title_label, ttk.Label):
+                title_label.configure(text=self._truncate_text_to_width(title_text, title_width, self.ui_fonts.title))
+            if isinstance(detail_label, ttk.Label):
+                detail_label.configure(wraplength=text_width, text=detail_text)
+
+    def _get_macro_text_wraplength(self, width: int | None = None) -> int:
+        canvas_width = width or self.macro_canvas.winfo_width() or self.macro_canvas.winfo_reqwidth() or 420
+        return max(min(int(canvas_width) - 150, 440), 220)
+
+    def _truncate_text_to_width(self, text: str, max_width: int, font_spec: tuple[str, ...]) -> str:
+        display_font = tkfont.Font(font=font_spec)
+        if display_font.measure(text) <= max_width:
+            return text
+
+        ellipsis = "..."
+        available_width = max_width - display_font.measure(ellipsis)
+        if available_width <= 0:
+            return ellipsis
+
+        trimmed = text
+        while trimmed and display_font.measure(trimmed) > available_width:
+            trimmed = trimmed[:-1]
+        return f"{trimmed.rstrip()}{ellipsis}"
 
     def _sync_macro_list_layout(self) -> None:
         self._update_macro_list_view_height()
