@@ -45,3 +45,13 @@ pip install -r requirements.txt
 ```powershell
 python -m unittest discover -s tests -p "test_*.py"
 ```
+
+## Release
+
+Push a tag like `v0.1.0` to trigger the GitHub Actions workflow that builds the
+Windows executable and publishes a GitHub Release.
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```

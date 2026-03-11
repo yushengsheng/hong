@@ -1,0 +1,99 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ github.event.inputs.release_tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "archive_name=hong-$tag-windows.zip" >> $env:GITHUB_OUTPUT
+
+      - name: Build executable
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --distpath dist `
+            --workpath build `
+            release.spec
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $PWD "release\宏录制器"
+          if (Test-Path $packageDir) {
+            Remove-Item $packageDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $packageDir | Out-Null
+          Copy-Item dist\宏录制器\* $packageDir -Recurse -Force
+          Copy-Item README.md $packageDir -Force
+          if (Test-Path start_macro_recorder.vbs) {
+            Copy-Item start_macro_recorder.vbs $packageDir -Force
+          }
+
+          $archivePath = Join-Path $PWD ("release\" + "${{ steps.meta.outputs.archive_name }}")
+          if (Test-Path $archivePath) {
+            Remove-Item $archivePath -Force
+          }
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $archivePath
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $archive = Join-Path $PWD ("release\" + "${{ steps.meta.outputs.archive_name }}")
+          gh release view $tag --repo ${{ github.repository }} *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag $archive `
+              --repo ${{ github.repository }} `
+              --title $tag `
+              --notes "Windows executable built by GitHub Actions."
+          } else {
+            gh release upload $tag $archive `
+              --repo ${{ github.repository }} `
+              --clobber
+          }

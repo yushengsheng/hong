@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path
 import sys
 import traceback
+
+from macro_app.runtime import get_runtime_root
 
 
 APP_TITLE = "宏录制器"
@@ -16,7 +17,7 @@ def show_message(message: str, *, error: bool = False) -> None:
 
 
 def main() -> None:
-    project_root = Path(__file__).resolve().parent
+    project_root = get_runtime_root()
     os.chdir(project_root)
 
     if str(project_root) not in sys.path:
@@ -31,7 +32,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        log_path = Path(__file__).resolve().with_name("launch-error.log")
+        log_path = get_runtime_root() / "launch-error.log"
         log_path.write_text(traceback.format_exc(), encoding="utf-8")
         show_message(
             "启动失败。\n\n"

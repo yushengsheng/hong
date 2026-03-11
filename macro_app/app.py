@@ -18,6 +18,7 @@ from .hotkeys import HotkeyParseError, format_hotkey, hotkey_from_tk_event, norm
 from .models import MacroScript
 from .player import MacroPlayer
 from .recorder import MacroRecorder
+from .runtime import get_runtime_root
 from .script_io import load_script, save_script
 
 ensure_dpi_awareness()
@@ -58,7 +59,7 @@ class MacroLibraryItem:
 
 class MacroApp:
     def __init__(self) -> None:
-        self.project_root = Path(__file__).resolve().parent.parent
+        self.project_root = get_runtime_root()
         self.macro_store_dir = self.project_root / "macros"
         self._startup_messages: list[str] = []
         self._ensure_macro_store_dir()
