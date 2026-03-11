@@ -8,6 +8,37 @@ from macro_app.models import MacroEvent, MacroScript
 from macro_app.script_io import load_script, save_script
 
 
+ROUND_TRIP_SPECIAL_KEYS = [
+    "f1",
+    "f12",
+    "ctrl",
+    "ctrl_l",
+    "ctrl_r",
+    "alt",
+    "alt_l",
+    "alt_r",
+    "shift",
+    "shift_r",
+    "cmd",
+    "cmd_r",
+    "tab",
+    "enter",
+    "esc",
+    "space",
+    "backspace",
+    "delete",
+    "insert",
+    "home",
+    "end",
+    "page_up",
+    "page_down",
+    "up",
+    "down",
+    "left",
+    "right",
+]
+
+
 class ScriptIoTests(unittest.TestCase):
     def test_text_round_trip_preserves_hotkey_and_custom_order(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -75,6 +106,36 @@ class ScriptIoTests(unittest.TestCase):
             self.assertEqual(
                 [event.kind for event in loaded.events],
                 ["key_press", "key_press", "key_release", "key_release"],
+            )
+
+    def test_text_round_trip_preserves_supported_special_keys(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "special-keys.txt"
+            events = []
+            time_offset = 0.0
+            for key_name in ROUND_TRIP_SPECIAL_KEYS:
+                events.append(MacroEvent(time_offset, "key_press", {"key": {"type": "special", "value": key_name}}))
+                time_offset += 0.01
+                events.append(MacroEvent(time_offset, "key_release", {"key": {"type": "special", "value": key_name}}))
+                time_offset += 0.01
+
+            script = MacroScript(
+                name="special-keys",
+                created_at="2026-03-11T10:00:00+00:00",
+                screen_size=(1920, 1080),
+                events=events,
+            )
+
+            save_script(path, script)
+            loaded = load_script(path)
+
+            self.assertEqual(
+                [event.payload["key"] for event in loaded.events],
+                [event.payload["key"] for event in events],
+            )
+            self.assertEqual(
+                [event.kind for event in loaded.events],
+                [event.kind for event in events],
             )
 
 
