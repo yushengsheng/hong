@@ -8,6 +8,7 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from .player import MacroPlayer
 from .recorder import MacroRecorder
 from .runtime import get_runtime_root
 from .script_io import load_script, save_script
+from .ui_theme import UIFontSet, build_ui_fonts
 
 ensure_dpi_awareness()
 
@@ -68,6 +70,7 @@ class MacroApp:
         self.root.title("宏录制器")
         self.root.geometry("480x420")
         self.root.minsize(400, 420)
+        self.ui_fonts = self._configure_ui_fonts()
         self.always_on_top_var = tk.BooleanVar(master=self.root, value=False)
         self._control_layout_mode = "wide"
         self._resizing_window_height = False
@@ -145,7 +148,11 @@ class MacroApp:
             variable=self.always_on_top_var,
             command=self._toggle_always_on_top,
         )
-        self.actions_hint_label = ttk.Label(self.actions_panel, text="Esc: 停止录制 / 中断播放", font=("Segoe UI", 9))
+        self.actions_hint_label = ttk.Label(
+            self.actions_panel,
+            text="Esc: 停止录制 / 中断播放",
+            font=self.ui_fonts.small,
+        )
 
         self.record_button.grid(row=0, column=0, padx=(0, 4), pady=(0, 6), sticky=tk.W)
         self.stop_record_button.grid(row=0, column=1, padx=4, pady=(0, 6), sticky=tk.W)
@@ -166,7 +173,7 @@ class MacroApp:
         self.phase_label = tk.Label(
             self.stage_panel,
             textvariable=self.phase_var,
-            font=("Segoe UI", 17, "bold"),
+            font=self.ui_fonts.stage,
             bg="#f8fafc",
             fg="#166534",
             padx=8,
@@ -177,7 +184,7 @@ class MacroApp:
         self.phase_status_caption_label = tk.Label(
             self.stage_panel,
             text="当前状态",
-            font=("Segoe UI", 8),
+            font=self.ui_fonts.small,
             bg="#f8fafc",
             fg="#64748b",
         )
@@ -186,7 +193,7 @@ class MacroApp:
         self.phase_status_value_label = tk.Label(
             self.stage_panel,
             textvariable=self.status_var,
-            font=("Segoe UI", 9, "bold"),
+            font=self.ui_fonts.body_bold,
             bg="#f8fafc",
             fg="#0f172a",
         )
@@ -195,7 +202,7 @@ class MacroApp:
         self.phase_hint_label = tk.Label(
             self.stage_panel,
             textvariable=self.phase_hint_var,
-            font=("Segoe UI", 8),
+            font=self.ui_fonts.small,
             bg="#f8fafc",
             fg="#475569",
             pady=4,
@@ -227,7 +234,13 @@ class MacroApp:
         self.log_frame = ttk.LabelFrame(outer, text="日志")
         self.log_frame.pack(fill=tk.X, pady=(8, 0))
 
-        self.log_text = tk.Text(self.log_frame, wrap="word", state=tk.DISABLED, height=2)
+        self.log_text = tk.Text(
+            self.log_frame,
+            wrap="word",
+            state=tk.DISABLED,
+            height=2,
+            font=self.ui_fonts.small,
+        )
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         log_scrollbar = ttk.Scrollbar(self.log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
@@ -254,6 +267,50 @@ class MacroApp:
             settings_button = row_controls["settings"]
             play_button.configure(state=tk.DISABLED if locked else tk.NORMAL)
             settings_button.configure(state=tk.DISABLED if locked else tk.NORMAL)
+
+    def _configure_ui_fonts(self) -> UIFontSet:
+        available_families = set(tkfont.families(self.root))
+        ui_fonts = build_ui_fonts(available_families)
+        actual_family = ui_fonts.family
+        if actual_family == "TkDefaultFont":
+            actual_family = str(tkfont.nametofont("TkDefaultFont").cget("family"))
+
+        resolved_fonts = UIFontSet(
+            family=actual_family,
+            small=(actual_family, ui_fonts.small[1]),
+            body=(actual_family, ui_fonts.body[1]),
+            body_bold=(actual_family, ui_fonts.body_bold[1], ui_fonts.body_bold[2]),
+            title=(actual_family, ui_fonts.title[1], ui_fonts.title[2]),
+            stage=(actual_family, ui_fonts.stage[1], ui_fonts.stage[2]),
+        )
+        ttk_style = ttk.Style(self.root)
+        ttk_style.configure(".", font=resolved_fonts.body)
+        ttk_style.configure("TLabelframe.Label", font=resolved_fonts.body_bold)
+
+        named_font_specs = {
+            "TkDefaultFont": resolved_fonts.body,
+            "TkTextFont": resolved_fonts.body,
+            "TkMenuFont": resolved_fonts.body,
+            "TkHeadingFont": resolved_fonts.body_bold,
+            "TkCaptionFont": resolved_fonts.small,
+            "TkSmallCaptionFont": resolved_fonts.small,
+            "TkIconFont": resolved_fonts.small,
+            "TkTooltipFont": resolved_fonts.small,
+        }
+
+        for name, spec in named_font_specs.items():
+            try:
+                named_font = tkfont.nametofont(name)
+            except tk.TclError:
+                continue
+
+            named_font.configure(
+                family=spec[0],
+                size=spec[1],
+                weight=spec[2] if len(spec) > 2 else "normal",
+            )
+
+        return resolved_fonts
 
     def _ensure_macro_store_dir(self) -> None:
         self.macro_store_dir.mkdir(exist_ok=True)
@@ -595,6 +652,7 @@ class MacroApp:
         for item in self.macro_items:
             row = ttk.Frame(self.macro_body, padding=(6, 5))
             row.pack(fill=tk.X)
+            row.columnconfigure(0, weight=1)
 
             tags: list[str] = []
             if self.current_path == item.path:
@@ -611,18 +669,18 @@ class MacroApp:
                 info_parts.append(" / ".join(tags))
 
             header_frame = ttk.Frame(row)
-            header_frame.grid(row=0, column=0, sticky=tk.W)
+            header_frame.grid(row=0, column=0, sticky=tk.EW)
 
-            title_label = ttk.Label(header_frame, text=item.script.name, font=("Segoe UI", 10, "bold"))
-            title_label.pack(side=tk.LEFT)
+            title_label = ttk.Label(header_frame, text=item.script.name, font=self.ui_fonts.title)
+            title_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
             buttons_frame = ttk.Frame(header_frame)
-            buttons_frame.pack(side=tk.LEFT, padx=(8, 0))
+            buttons_frame.pack(side=tk.RIGHT, padx=(8, 0))
 
             drag_handle = tk.Label(
                 buttons_frame,
                 text="⋮⋮",
-                font=("Segoe UI", 9),
+                font=self.ui_fonts.small,
                 fg="#64748b",
                 cursor="fleur",
             )
@@ -642,9 +700,11 @@ class MacroApp:
             detail_label = ttk.Label(
                 row,
                 text=f"{' | '.join(info_parts)} | 文件：{item.path.name}",
-                font=("Segoe UI", 8),
+                font=self.ui_fonts.small,
+                justify=tk.LEFT,
+                wraplength=390,
             )
-            detail_label.grid(row=1, column=0, sticky=tk.W, pady=(2, 0))
+            detail_label.grid(row=1, column=0, sticky=tk.EW, pady=(3, 0))
 
             self.macro_row_controls.append(
                 {
@@ -1241,7 +1301,7 @@ class MacroApp:
             hotkeys_resumed = True
             self._resume_global_hotkeys()
 
-        ttk.Label(content, text=script.name, font=("Segoe UI", 12, "bold")).pack(anchor=tk.W)
+        ttk.Label(content, text=script.name, font=self.ui_fonts.title).pack(anchor=tk.W)
         ttk.Label(content, text=f"文件：{path.name}").pack(anchor=tk.W, pady=(4, 12))
 
         try:
