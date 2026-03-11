@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from macro_app.models import MacroScript
+from macro_app.models import MacroEvent, MacroScript
 from macro_app.script_io import load_script, save_script
 
 
@@ -44,6 +44,38 @@ class ScriptIoTests(unittest.TestCase):
         script = MacroScript.from_dict(payload)
         self.assertTrue(script.created_at)
         self.assertEqual(script.name, "legacy")
+
+    def test_text_round_trip_preserves_modifier_function_key_sequence(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "combo.txt"
+            script = MacroScript(
+                name="combo",
+                created_at="2026-03-11T10:00:00+00:00",
+                screen_size=(1920, 1080),
+                events=[
+                    MacroEvent(0.0, "key_press", {"key": {"type": "special", "value": "ctrl_l"}}),
+                    MacroEvent(0.05, "key_press", {"key": {"type": "special", "value": "f5"}}),
+                    MacroEvent(0.10, "key_release", {"key": {"type": "special", "value": "f5"}}),
+                    MacroEvent(0.15, "key_release", {"key": {"type": "special", "value": "ctrl_l"}}),
+                ],
+            )
+
+            save_script(path, script)
+            loaded = load_script(path)
+
+            self.assertEqual(
+                [event.payload["key"] for event in loaded.events],
+                [
+                    {"type": "special", "value": "ctrl_l"},
+                    {"type": "special", "value": "f5"},
+                    {"type": "special", "value": "f5"},
+                    {"type": "special", "value": "ctrl_l"},
+                ],
+            )
+            self.assertEqual(
+                [event.kind for event in loaded.events],
+                ["key_press", "key_press", "key_release", "key_release"],
+            )
 
 
 if __name__ == "__main__":
