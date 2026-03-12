@@ -95,7 +95,8 @@ class MacroPlayer:
             remaining = target_time - time.perf_counter()
             if remaining <= 0:
                 return
-            time.sleep(min(remaining, 0.01))
+            if self._wait_or_stop(min(remaining, 0.01)):
+                return
 
     def _apply_event(
         self,
@@ -199,11 +200,16 @@ class MacroPlayer:
             return
 
         self._mouse.position = position
+        if self._stop_event.is_set():
+            return
+
         self._mouse.press(button)
         self._pressed_buttons[button.name] = button
-        time.sleep(0.01)
-        self._mouse.release(button)
-        self._pressed_buttons.pop(button.name, None)
+        try:
+            self._wait_or_stop(0.01)
+        finally:
+            self._mouse.release(button)
+            self._pressed_buttons.pop(button.name, None)
 
     def _perform_drag(
         self,
@@ -217,7 +223,11 @@ class MacroPlayer:
             return
 
         self._mouse.position = start_position
-        time.sleep(0.01)
+        if self._wait_or_stop(0.01):
+            return
+        if self._stop_event.is_set():
+            return
+
         self._mouse.press(button)
         self._pressed_buttons[button.name] = button
 
@@ -235,7 +245,8 @@ class MacroPlayer:
                 next_x = round(start_x + (end_x - start_x) * progress)
                 next_y = round(start_y + (end_y - start_y) * progress)
                 self._mouse.position = (next_x, next_y)
-                time.sleep(total_duration / steps)
+                if self._wait_or_stop(total_duration / steps):
+                    break
         finally:
             try:
                 self._mouse.release(button)
@@ -297,6 +308,12 @@ class MacroPlayer:
                 return keyboard.KeyCode.from_vk(vk)
 
         return deserialize_key(data)
+
+    def _wait_or_stop(self, timeout: float) -> bool:
+        wait_time = max(float(timeout), 0.0)
+        if wait_time == 0:
+            return self._stop_event.is_set()
+        return bool(self._stop_event.wait(wait_time))
 
     def _shortcut_modifier_active(self) -> bool:
         return any(

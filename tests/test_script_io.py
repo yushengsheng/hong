@@ -202,6 +202,86 @@ class ScriptIoTests(unittest.TestCase):
                 [event.kind for event in events],
             )
 
+    def test_text_loads_legacy_virtual_key_lines(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "legacy-vk.txt"
+            path.write_text(
+                "\n".join(
+                    [
+                        "# 宏脚本文本格式 v4",
+                        "名称: legacy-vk",
+                        "创建时间: 2026-03-11T10:00:00+00:00",
+                        "版本: 4",
+                        "屏幕尺寸: 1920,1080",
+                        "屏幕原点: 0,0",
+                        "默认循环次数: 1",
+                        "默认播放速度: 1.0",
+                        "全局快捷键: ",
+                        "自定义排序: ",
+                        "事件数: 2",
+                        "",
+                        "事件:",
+                        "间隔=0.000000 | 键盘按下 | 按键=虚拟键:67",
+                        "间隔=0.020000 | 键盘松开 | 按键=虚拟键:67",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            loaded = load_script(path)
+
+            self.assertEqual(
+                [event.payload["key"] for event in loaded.events],
+                [
+                    {"type": "vk", "value": 67},
+                    {"type": "vk", "value": 67},
+                ],
+            )
+
+    def test_text_save_preserves_event_comments_when_rewriting_metadata(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "commented.txt"
+            path.write_text(
+                "\n".join(
+                    [
+                        "# 宏脚本文本格式 v4",
+                        "# 头部注释",
+                        "名称: commented",
+                        "创建时间: 2026-03-11T10:00:00+00:00",
+                        "版本: 4",
+                        "屏幕尺寸: 1920,1080",
+                        "屏幕原点: 0,0",
+                        "默认循环次数: 1",
+                        "默认播放速度: 1.0",
+                        "全局快捷键: ",
+                        "自定义排序: ",
+                        "事件数: 4",
+                        "",
+                        "事件:",
+                        "### 第一段",
+                        "间隔=0.000000 | 键盘按下 | 按键=特殊:ctrl_l",
+                        "间隔=0.010000 | 键盘按下 | 按键=虚拟键:67",
+                        "",
+                        "### 第二段",
+                        "间隔=0.020000 | 键盘松开 | 按键=虚拟键:67",
+                        "间隔=0.030000 | 键盘松开 | 按键=特殊:ctrl_l",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            script = load_script(path)
+            script.custom_order = 5
+            save_script(path, script, preserve_text_from=path)
+
+            rewritten = path.read_text(encoding="utf-8")
+            self.assertIn("### 第一段", rewritten)
+            self.assertIn("### 第二段", rewritten)
+            self.assertIn("按键=虚拟键:67", rewritten)
+            self.assertIn("自定义排序: 5", rewritten)
+
 
 if __name__ == "__main__":
     unittest.main()

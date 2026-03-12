@@ -16,6 +16,11 @@ TEXT_MOUSE_DRAG = "鼠标拖拽"
 TEXT_MOUSE_SCROLL = "鼠标滚轮"
 TEXT_KEY_PRESS = "键盘按下"
 TEXT_KEY_RELEASE = "键盘松开"
+TEXT_KEY_EVENT_LABELS = {
+    "key_press": TEXT_KEY_PRESS,
+    "key_release": TEXT_KEY_RELEASE,
+}
+TEXT_KEY_EVENT_KINDS = {value: key for key, value in TEXT_KEY_EVENT_LABELS.items()}
 
 BUTTON_LABELS = {
     "left": "左键",
@@ -38,9 +43,36 @@ VISIBLE_CHARACTERS = {
     "\n": "<换行>",
 }
 VISIBLE_CHARACTER_VALUES = {value: key for key, value in VISIBLE_CHARACTERS.items()}
+TEXT_METADATA_KEYS = (
+    "名称",
+    "创建时间",
+    "版本",
+    "屏幕尺寸",
+    "屏幕原点",
+    "默认循环次数",
+    "默认播放速度",
+    "全局快捷键",
+    "自定义排序",
+    "事件数",
+)
+TEXT_HEADER_COMMENTS = (
+    TEXT_HEADER,
+    "# 每一行只保留一个动作节点，不写入鼠标移动轨迹。",
+    "# “间隔”表示距离上一条动作的等待秒数。",
+    "# “默认循环次数”和“默认播放速度”会在列表播放时直接生效。",
+    "# “全局快捷键”格式示例：Ctrl+Alt+1 / Ctrl+Shift+F2。",
+    "# “自定义排序”留空时按录制时间排序，填写数字时按数字从小到大排。",
+    "# 修改 x/y 后，加载时会自动重算比例坐标，方便跨 1K、2K、4K 屏幕适配。",
+    "# 键盘按键格式：字符:a / 特殊:enter / 虚拟键:13",
+)
 
 
-def save_script(path: str | Path, script: MacroScript) -> None:
+def save_script(
+    path: str | Path,
+    script: MacroScript,
+    *,
+    preserve_text_from: str | Path | None = None,
+) -> None:
     target = Path(path)
     suffix = target.suffix.lower()
 
@@ -53,7 +85,8 @@ def save_script(path: str | Path, script: MacroScript) -> None:
         return
 
     if suffix == ".txt":
-        target.write_text(_script_to_text(script), encoding="utf-8")
+        base_text = _read_preserved_text_source(preserve_text_from)
+        target.write_text(_script_to_text(script, base_text=base_text), encoding="utf-8")
         return
 
     raise ValueError("仅支持 .txt 或 .json 格式。")
@@ -76,42 +109,146 @@ def load_script(path: str | Path) -> MacroScript:
     return _script_from_text(raw_text, default_name=source.stem)
 
 
-def _script_to_text(script: MacroScript) -> str:
-    width, height = script.screen_size
-    left, top = script.screen_origin
+def _script_to_text(script: MacroScript, *, base_text: str | None = None) -> str:
     visible_events = _simplify_events_for_text(script.events)
+    metadata_values = _build_text_metadata_values(script, visible_events=visible_events)
+    event_lines = _build_text_event_lines(visible_events)
+    if base_text is not None:
+        merged_lines = _merge_script_text(
+            base_text=base_text,
+            script=script,
+            metadata_values=metadata_values,
+            fallback_event_lines=event_lines,
+        )
+        if merged_lines is not None:
+            return _join_text_lines(merged_lines)
 
-    lines = [
-        TEXT_HEADER,
-        "# 每一行只保留一个动作节点，不写入鼠标移动轨迹。",
-        "# “间隔”表示距离上一条动作的等待秒数。",
-        "# “默认循环次数”和“默认播放速度”会在列表播放时直接生效。",
-        "# “全局快捷键”格式示例：Ctrl+Alt+1 / Ctrl+Shift+F2。",
-        "# “自定义排序”留空时按录制时间排序，填写数字时按数字从小到大排。",
-        "# 修改 x/y 后，加载时会自动重算比例坐标，方便跨 1K、2K、4K 屏幕适配。",
-        "# 键盘按键格式：字符:a / 特殊:enter / 虚拟键:13",
-        "",
-        f"名称: {script.name}",
-        f"创建时间: {script.created_at}",
-        f"版本: {script.version}",
-        f"屏幕尺寸: {width},{height}",
-        f"屏幕原点: {left},{top}",
-        f"默认循环次数: {script.default_loops}",
-        f"默认播放速度: {script.default_speed}",
-        f"全局快捷键: {script.global_hotkey}",
-        f"自定义排序: {'' if script.custom_order is None else script.custom_order}",
-        f"事件数: {len(visible_events)}",
-        "",
+    return _join_text_lines(
+        [
+            *TEXT_HEADER_COMMENTS,
+            "",
+            *_format_text_metadata_lines(metadata_values),
+            "",
+            TEXT_EVENTS_MARKER,
+            *event_lines,
+        ]
+    )
+
+
+def _merge_script_text(
+    *,
+    base_text: str,
+    script: MacroScript,
+    metadata_values: dict[str, str],
+    fallback_event_lines: list[str],
+) -> list[str] | None:
+    split_lines = _split_text_sections(base_text)
+    if split_lines is None:
+        return None
+
+    header_lines, preserved_event_lines = split_lines
+    event_lines = preserved_event_lines if _can_preserve_event_block(base_text, script) else fallback_event_lines
+    return [
+        *_merge_header_lines(header_lines, metadata_values),
         TEXT_EVENTS_MARKER,
+        *event_lines,
     ]
 
+
+def _build_text_metadata_values(script: MacroScript, *, visible_events: list[MacroEvent]) -> dict[str, str]:
+    width, height = script.screen_size
+    left, top = script.screen_origin
+    return {
+        "名称": script.name,
+        "创建时间": script.created_at,
+        "版本": str(script.version),
+        "屏幕尺寸": f"{width},{height}",
+        "屏幕原点": f"{left},{top}",
+        "默认循环次数": str(script.default_loops),
+        "默认播放速度": str(script.default_speed),
+        "全局快捷键": script.global_hotkey,
+        "自定义排序": "" if script.custom_order is None else str(script.custom_order),
+        "事件数": str(len(visible_events)),
+    }
+
+
+def _format_text_metadata_lines(metadata_values: dict[str, str]) -> list[str]:
+    return [f"{key}: {metadata_values[key]}" for key in TEXT_METADATA_KEYS]
+
+
+def _build_text_event_lines(events: list[MacroEvent]) -> list[str]:
+    lines: list[str] = []
     previous_offset = 0.0
-    for event in visible_events:
+    for event in events:
         interval = max(event.time_offset - previous_offset, 0.0)
         previous_offset = event.time_offset
         lines.append(_event_to_text(event, interval=interval))
+    return lines
 
+
+def _split_text_sections(text: str) -> tuple[list[str], list[str]] | None:
+    source_lines = text.splitlines()
+    marker_index = next((index for index, line in enumerate(source_lines) if line.strip() == TEXT_EVENTS_MARKER), None)
+    if marker_index is None:
+        return None
+    return source_lines[:marker_index], source_lines[marker_index + 1 :]
+
+
+def _merge_header_lines(header_lines: list[str], metadata_values: dict[str, str]) -> list[str]:
+    merged_lines: list[str] = []
+    seen_metadata_keys: set[str] = set()
+
+    for raw_line in header_lines:
+        stripped_line = raw_line.strip()
+        if not stripped_line or stripped_line.startswith("#"):
+            merged_lines.append(raw_line)
+            continue
+
+        key, separator, _value = stripped_line.partition(":")
+        metadata_key = key.strip()
+        if separator and metadata_key in metadata_values:
+            merged_lines.append(f"{metadata_key}: {metadata_values[metadata_key]}")
+            seen_metadata_keys.add(metadata_key)
+            continue
+
+        merged_lines.append(raw_line)
+
+    missing_metadata_lines = [
+        f"{key}: {metadata_values[key]}"
+        for key in TEXT_METADATA_KEYS
+        if key not in seen_metadata_keys
+    ]
+    if missing_metadata_lines:
+        insert_at = len(merged_lines)
+        while insert_at > 0 and not merged_lines[insert_at - 1].strip():
+            insert_at -= 1
+        merged_lines[insert_at:insert_at] = missing_metadata_lines
+
+    return merged_lines
+
+
+def _join_text_lines(lines: list[str]) -> str:
     return "\n".join(lines) + "\n"
+
+
+def _read_preserved_text_source(source: str | Path | None) -> str | None:
+    if source is None:
+        return None
+
+    source_path = Path(source)
+    if source_path.suffix.lower() != ".txt" or not source_path.exists():
+        return None
+
+    return source_path.read_text(encoding="utf-8")
+
+
+def _can_preserve_event_block(base_text: str, script: MacroScript) -> bool:
+    try:
+        source_script = _script_from_text(base_text, default_name=script.name)
+    except Exception:
+        return False
+
+    return source_script.events == script.events
 
 
 def _script_from_text(text: str, *, default_name: str) -> MacroScript:
@@ -268,11 +405,12 @@ def _event_to_text(event: MacroEvent, *, interval: float) -> str:
     parts = [f"间隔={interval:.6f}"]
     payload = event.payload
 
-    if event.kind == "mouse_tap":
+    if event.kind in {"mouse_tap", "mouse_click"}:
         parts.append(TEXT_MOUSE_TAP)
-        parts.append(f"x={int(payload['x'])}")
-        parts.append(f"y={int(payload['y'])}")
+        parts.extend(_pointer_text_fields(payload))
         parts.append(f"按键={_button_to_text(payload['button']['name'])}")
+        if event.kind == "mouse_click":
+            parts.append(f"动作={PRESS_LABELS[bool(payload['pressed'])]}")
         return " | ".join(parts)
 
     if event.kind == "mouse_drag":
@@ -287,28 +425,14 @@ def _event_to_text(event: MacroEvent, *, interval: float) -> str:
 
     if event.kind == "mouse_scroll":
         parts.append(TEXT_MOUSE_SCROLL)
-        parts.append(f"x={int(payload['x'])}")
-        parts.append(f"y={int(payload['y'])}")
+        parts.extend(_pointer_text_fields(payload))
         parts.append(f"横向={int(payload['dx'])}")
         parts.append(f"纵向={int(payload['dy'])}")
         return " | ".join(parts)
 
-    if event.kind == "key_press":
-        parts.append(TEXT_KEY_PRESS)
+    if event.kind in TEXT_KEY_EVENT_LABELS:
+        parts.append(TEXT_KEY_EVENT_LABELS[event.kind])
         parts.append(f"按键={_key_to_text(payload['key'])}")
-        return " | ".join(parts)
-
-    if event.kind == "key_release":
-        parts.append(TEXT_KEY_RELEASE)
-        parts.append(f"按键={_key_to_text(payload['key'])}")
-        return " | ".join(parts)
-
-    if event.kind == "mouse_click":
-        parts.append(TEXT_MOUSE_TAP)
-        parts.append(f"x={int(payload['x'])}")
-        parts.append(f"y={int(payload['y'])}")
-        parts.append(f"按键={_button_to_text(payload['button']['name'])}")
-        parts.append(f"动作={PRESS_LABELS[bool(payload['pressed'])]}")
         return " | ".join(parts)
 
     raise ValueError(f"不支持导出此事件类型：{event.kind}")
@@ -333,14 +457,11 @@ def _event_from_text(line: str, *, bounds: ScreenBounds, previous_time: float) -
     fields = _parse_fields(field_parts)
 
     if kind_label == TEXT_MOUSE_TAP:
-        if "动作" in fields:
-            payload = _pointer_payload_from_fields(fields, bounds=bounds)
-            payload["button"] = {"name": _button_from_text(fields["按键"])}
-            payload["pressed"] = PRESS_VALUES[fields["动作"]]
-            return MacroEvent(time_offset=time_offset, kind="mouse_click", payload=payload)
-
         payload = _pointer_payload_from_fields(fields, bounds=bounds)
         payload["button"] = {"name": _button_from_text(fields["按键"])}
+        if "动作" in fields:
+            payload["pressed"] = PRESS_VALUES[fields["动作"]]
+            return MacroEvent(time_offset=time_offset, kind="mouse_click", payload=payload)
         return MacroEvent(time_offset=time_offset, kind="mouse_tap", payload=payload)
 
     if kind_label == TEXT_MOUSE_DRAG:
@@ -355,11 +476,12 @@ def _event_from_text(line: str, *, bounds: ScreenBounds, previous_time: float) -
         payload["dy"] = int(fields["纵向"])
         return MacroEvent(time_offset=time_offset, kind="mouse_scroll", payload=payload)
 
-    if kind_label == TEXT_KEY_PRESS:
-        return MacroEvent(time_offset=time_offset, kind="key_press", payload={"key": _key_from_text(fields["按键"])})
-
-    if kind_label == TEXT_KEY_RELEASE:
-        return MacroEvent(time_offset=time_offset, kind="key_release", payload={"key": _key_from_text(fields["按键"])})
+    if kind_label in TEXT_KEY_EVENT_KINDS:
+        return MacroEvent(
+            time_offset=time_offset,
+            kind=TEXT_KEY_EVENT_KINDS[kind_label],
+            payload={"key": _key_from_text(fields["按键"])},
+        )
 
     raise ValueError(f"不支持的事件类型：{kind_label}")
 
@@ -375,6 +497,13 @@ def _pointer_payload_from_fields(fields: dict[str, str], *, bounds: ScreenBounds
         "normalized_x": normalized_x,
         "normalized_y": normalized_y,
     }
+
+
+def _pointer_text_fields(payload: dict[str, object]) -> list[str]:
+    return [
+        f"x={int(payload['x'])}",
+        f"y={int(payload['y'])}",
+    ]
 
 
 def _drag_payload_from_fields(fields: dict[str, str], *, bounds: ScreenBounds) -> dict[str, object]:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+from pynput import mouse as pynput_mouse
+
 from macro_app.display import ScreenBounds
 from macro_app.models import MacroEvent
 from macro_app.player import MacroPlayer
@@ -20,16 +22,44 @@ class FakeKeyboard:
 
 class FakeMouse:
     def __init__(self) -> None:
-        self.position = (0, 0)
+        self._position = (0, 0)
+        self.actions: list[tuple[str, object]] = []
 
-    def press(self, _button: object) -> None:
-        return None
+    @property
+    def position(self) -> tuple[int, int]:
+        return self._position
 
-    def release(self, _button: object) -> None:
-        return None
+    @position.setter
+    def position(self, value: tuple[int, int]) -> None:
+        self._position = value
+        self.actions.append(("move", value))
+
+    def press(self, button: object) -> None:
+        self.actions.append(("press", getattr(button, "name", str(button))))
+
+    def release(self, button: object) -> None:
+        self.actions.append(("release", getattr(button, "name", str(button))))
 
     def scroll(self, _dx: int, _dy: int) -> None:
         return None
+
+
+class StopOnWaitEvent:
+    def __init__(self) -> None:
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def clear(self) -> None:
+        self._set = False
+
+    def wait(self, _timeout: float) -> bool:
+        self._set = True
+        return True
 
 
 class MacroPlayerTests(unittest.TestCase):
@@ -163,6 +193,18 @@ class MacroPlayerTests(unittest.TestCase):
                 ("release", "ctrl_l"),
                 ("release", "vk:86"),
             ],
+        )
+
+    def test_perform_drag_stops_before_press_when_stop_requested_during_ramp_up(self) -> None:
+        player = MacroPlayer()
+        player._mouse = FakeMouse()
+        player._stop_event = StopOnWaitEvent()
+
+        player._perform_drag((10, 20), (30, 40), pynput_mouse.Button.left, duration=0.5)
+
+        self.assertEqual(
+            player._mouse.actions,
+            [("move", (10, 20))],
         )
 
 

@@ -73,6 +73,11 @@ DISPLAY_NAMES = {
     "<right>": "Right",
 }
 
+TK_STATE_SHIFT = 0x0001
+TK_STATE_CTRL = 0x0004
+TK_STATE_ALT = 0x0008
+TK_STATE_WIN = 0x0040
+
 
 def normalize_hotkey(raw: str) -> tuple[str, str]:
     text = raw.strip().replace("＋", "+")
@@ -129,13 +134,7 @@ def hotkey_from_tk_event(keysym: str, state: int) -> tuple[str, str] | None:
     if normalized_key is None:
         return None
 
-    modifiers: list[str] = []
-    if state & 0x0004:
-        modifiers.append("Ctrl")
-    if state & 0x0008:
-        modifiers.append("Alt")
-    if state & 0x0001:
-        modifiers.append("Shift")
+    modifiers = _modifier_tokens_from_tk_state(state)
 
     if not modifiers:
         raise HotkeyParseError("全局快捷键至少需要一个修饰键，例如 Ctrl+Alt+1。")
@@ -172,7 +171,20 @@ def _normalize_token(raw_token: str) -> str:
 
 def _normalize_tk_keysym(keysym: str) -> str | None:
     folded = keysym.strip().casefold()
-    if folded in {"control_l", "control_r", "shift_l", "shift_r", "alt_l", "alt_r", "win_l", "win_r"}:
+    if folded in {
+        "control_l",
+        "control_r",
+        "shift_l",
+        "shift_r",
+        "alt_l",
+        "alt_r",
+        "win_l",
+        "win_r",
+        "super_l",
+        "super_r",
+        "meta_l",
+        "meta_r",
+    }:
         return None
 
     keysym_aliases = {
@@ -205,6 +217,19 @@ def _normalize_tk_keysym(keysym: str) -> str | None:
         return keysym.upper()
 
     raise HotkeyParseError(f"不支持的按键：{keysym}")
+
+
+def _modifier_tokens_from_tk_state(state: int) -> list[str]:
+    modifiers: list[str] = []
+    if state & TK_STATE_CTRL:
+        modifiers.append("Ctrl")
+    if state & TK_STATE_ALT:
+        modifiers.append("Alt")
+    if state & TK_STATE_SHIFT:
+        modifiers.append("Shift")
+    if state & TK_STATE_WIN:
+        modifiers.append("Win")
+    return modifiers
 
 
 def _display_token(token: str) -> str:

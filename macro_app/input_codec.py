@@ -23,7 +23,7 @@ def serialize_key(
     if isinstance(key, keyboard.KeyCode):
         if key.char is not None:
             normalized_char = _normalize_recorded_char(key.char)
-            if prefer_vk:
+            if prefer_vk and not _can_round_trip_char_shortcut(normalized_char):
                 vk = key.vk if key.vk is not None else virtual_key_from_char(normalized_char)
                 if vk is not None:
                     return {"type": "vk", "value": vk}
@@ -108,3 +108,8 @@ def _normalize_recorded_char(value: str) -> str:
         return chr(code_point + 96)
 
     return value
+
+
+def _can_round_trip_char_shortcut(value: str) -> bool:
+    normalized_value = _normalize_recorded_char(value)
+    return len(normalized_value) == 1 and virtual_key_from_char(normalized_value) is not None

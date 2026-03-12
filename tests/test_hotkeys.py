@@ -24,6 +24,11 @@ class HotkeyTests(unittest.TestCase):
         with self.assertRaises(HotkeyParseError):
             hotkey_from_tk_event("1", 0)
 
+    def test_hotkey_from_tk_event_builds_win_combo(self) -> None:
+        canonical, display = hotkey_from_tk_event("1", 0x0040)
+        self.assertEqual(canonical, "<cmd>+1")
+        self.assertEqual(display, "Win+1")
+
 
 if __name__ == "__main__":
     unittest.main()

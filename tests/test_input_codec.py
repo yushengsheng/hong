@@ -75,9 +75,14 @@ class InputCodecTests(unittest.TestCase):
         payload = serialize_key(keyboard.KeyCode.from_char("\x16"))
         self.assertEqual(payload, {"type": "char", "value": "v"})
 
-    def test_serialize_key_prefers_vk_when_requested_for_shortcut_key(self) -> None:
+    def test_serialize_key_keeps_readable_char_for_shortcut_key(self) -> None:
         payload = serialize_key(keyboard.KeyCode(vk=86, char="V"), prefer_vk=True)
-        self.assertEqual(payload, {"type": "vk", "value": 86})
+        self.assertEqual(payload, {"type": "char", "value": "V"})
+
+    def test_serialize_ctrl_shortcut_control_character_as_readable_char(self) -> None:
+        key = keyboard.KeyCode(vk=67, char="\x03")
+        payload = serialize_key(key, prefer_vk=True)
+        self.assertEqual(payload, {"type": "char", "value": "c"})
 
     def test_deserialize_key_restores_printable_char_keycode(self) -> None:
         key = deserialize_key({"type": "char", "value": "c"})

@@ -71,6 +71,7 @@ class MacroApp:
         self.root.geometry("560x460")
         self.root.minsize(460, 420)
         self.ui_fonts = self._configure_ui_fonts()
+        self._measure_fonts: dict[tuple[object, ...], tkfont.Font] = {}
         self.always_on_top_var = tk.BooleanVar(master=self.root, value=False)
         self._control_layout_mode = "wide"
         self._resizing_window_height = False
@@ -103,7 +104,6 @@ class MacroApp:
 
         self._build_ui()
         self._refresh_macro_list()
-        self._set_controls()
         self._update_window_bounds()
 
         self.root.after(100, self._drain_ui_queue)
@@ -252,9 +252,9 @@ class MacroApp:
         self._flush_startup_messages()
 
     def _set_controls(self) -> None:
-        recording = self.recorder.active or self._stopping_record
-        playing = self.player.active or self._playing or self._stopping_playback
-        locked = recording or playing or self._arming
+        recording = self._is_recording_busy()
+        playing = self._is_playback_busy()
+        locked = self._is_macro_interaction_locked()
 
         self.record_button.configure(state=tk.DISABLED if locked else tk.NORMAL)
         self.stop_record_button.configure(
@@ -267,6 +267,21 @@ class MacroApp:
             settings_button = row_controls["settings"]
             play_button.configure(state=tk.DISABLED if locked else tk.NORMAL)
             settings_button.configure(state=tk.DISABLED if locked else tk.NORMAL)
+
+    def _is_recording_busy(self) -> bool:
+        return bool(self.recorder.active or self._stopping_record)
+
+    def _is_playback_busy(self) -> bool:
+        return bool(self.player.active or self._playing or self._stopping_playback)
+
+    def _is_macro_interaction_locked(self) -> bool:
+        return bool(self._is_recording_busy() or self._is_playback_busy() or self._arming)
+
+    def _is_record_start_blocked(self) -> bool:
+        return bool(self.recorder.active or self.player.active or self._playing or self._arming)
+
+    def _is_path_playing(self, path: Path) -> bool:
+        return bool(self._playing_path == path and self._is_playback_busy())
 
     def _configure_ui_fonts(self) -> UIFontSet:
         available_families = set(tkfont.families(self.root))
@@ -460,6 +475,20 @@ class MacroApp:
         self.phase_hint_var.set(hint)
         self.phase_label.configure(fg=color)
 
+    def _set_status_phase(self, status: str, title: str, hint: str, color: str) -> None:
+        self.status_var.set(status)
+        self._set_phase(title, hint, color)
+
+    def _reset_playback_state(self) -> None:
+        self._playing = False
+        self._stopping_playback = False
+        self._playing_path = None
+        self._stop_playback_abort_listener()
+
+    def _clear_current_selection(self) -> None:
+        self.current_path = None
+        self.current_script = None
+
     def _drain_ui_queue(self) -> None:
         while True:
             try:
@@ -491,17 +520,12 @@ class MacroApp:
 
             if message == "error":
                 text = str(payload)
-                self._playing = False
-                self._playing_path = None
+                self._reset_playback_state()
                 self._stopping_record = False
-                self._stopping_playback = False
-                self._stop_playback_abort_listener()
-                self.status_var.set("出错")
-                self._set_phase("出错", "请查看日志内容，修正后再重试。", "#b91c1c")
+                self._set_status_phase("出错", "出错", "请查看日志内容，修正后再重试。", "#b91c1c")
                 self._log(text)
                 messagebox.showerror("错误", text)
                 self._refresh_macro_list()
-                self._set_controls()
                 continue
 
         self.root.after(100, self._drain_ui_queue)
@@ -510,13 +534,10 @@ class MacroApp:
         self._stopping_record = False
 
         if not script.events:
-            self.current_script = None
-            self.current_path = None
-            self.status_var.set("录制结果为空")
-            self._set_phase("未保存", "本次没有捕获到动作节点，因此没有自动保存。", "#92400e")
+            self._clear_current_selection()
+            self._set_status_phase("录制结果为空", "未保存", "本次没有捕获到动作节点，因此没有自动保存。", "#92400e")
             self._log("录制完成，但没有捕获到动作节点，未自动保存。")
             self._refresh_macro_list()
-            self._set_controls()
             return
 
         try:
@@ -527,11 +548,9 @@ class MacroApp:
 
         self.current_script = script
         self.current_path = path
-        self.status_var.set("录制完成并已保存")
-        self._set_phase("录制完成", "宏已自动保存，现在可以直接在列表中播放或设置。", "#166534")
+        self._set_status_phase("录制完成并已保存", "录制完成", "宏已自动保存，现在可以直接在列表中播放或设置。", "#166534")
         self._log(f"录制完成，共捕获 {len(script.events)} 个事件，已自动保存：{path.name}")
         self._refresh_macro_list()
-        self._set_controls()
 
     def _handle_playback_finished(self, payload: object) -> None:
         detail = "播放完成"
@@ -545,10 +564,7 @@ class MacroApp:
         else:
             detail = str(payload)
 
-        self._playing = False
-        self._stopping_playback = False
-        self._playing_path = None
-        self._stop_playback_abort_listener()
+        self._reset_playback_state()
 
         if played_path is not None:
             self.current_path = played_path
@@ -556,14 +572,12 @@ class MacroApp:
             if script is not None:
                 self.current_script = script
 
-        self.status_var.set(detail)
         if detail == "播放完成":
-            self._set_phase("播放完成", "本次回放已结束，可以在列表中再次播放。", "#166534")
+            self._set_status_phase(detail, "播放完成", "本次回放已结束，可以在列表中再次播放。", "#166534")
         else:
-            self._set_phase("播放已停止", "回放已中断，可以重新开始。", "#92400e")
+            self._set_status_phase(detail, "播放已停止", "回放已中断，可以重新开始。", "#92400e")
         self._log(detail)
         self._refresh_macro_list()
-        self._set_controls()
 
     def _log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -575,52 +589,65 @@ class MacroApp:
     def _refresh_macro_list(self) -> None:
         self.macro_items = self._collect_macro_items()
         self._macro_store_signature = self._get_macro_store_signature()
-        if self.current_path is not None:
-            if not self.current_path.exists():
-                self.current_path = None
-                self.current_script = None
-            else:
-                current_script = self._load_macro_file(self.current_path, show_error=False)
-                if current_script is None:
-                    self.current_path = None
-                    self.current_script = None
-                else:
-                    self.current_script = current_script
+        self._sync_current_script_from_current_path()
         if self._global_hotkeys_suspended == 0:
             self._rebuild_global_hotkeys()
         self._render_macro_list()
         self._set_controls()
 
-    def _poll_macro_store(self) -> None:
-        latest_signature = self._get_macro_store_signature()
-        if latest_signature != self._macro_store_signature:
-            self._refresh_macro_list()
+    def _sync_current_script_from_current_path(self) -> None:
+        if self.current_path is None:
+            return
 
-        self.root.after(1500, self._poll_macro_store)
+        if not self.current_path.exists():
+            self._clear_current_selection()
+            return
+
+        current_script = self._load_macro_file(self.current_path, show_error=False)
+        if current_script is None:
+            self._clear_current_selection()
+            return
+
+        self.current_script = current_script
+
+    def _poll_macro_store(self) -> None:
+        try:
+            latest_signature = self._get_macro_store_signature()
+            if latest_signature != self._macro_store_signature:
+                self._refresh_macro_list()
+        except Exception as exc:
+            self._log(f"扫描宏目录时发生变化，已忽略本次刷新：{exc}")
+        finally:
+            self.root.after(1500, self._poll_macro_store)
 
     def _get_macro_store_signature(self) -> tuple[tuple[str, float, int], ...]:
         entries: list[tuple[str, float, int]] = []
-        for path in self.macro_store_dir.iterdir():
-            if not self._is_macro_file_path(path):
+        for path in self._iter_macro_store_paths():
+            try:
+                stat = path.stat()
+            except OSError:
                 continue
-            stat = path.stat()
             entries.append((path.name.lower(), stat.st_mtime, stat.st_size))
         return tuple(sorted(entries))
 
     def _collect_macro_items(self) -> list[MacroLibraryItem]:
-        candidates = [path for path in self.macro_store_dir.iterdir() if self._is_macro_file_path(path)]
+        candidates = self._iter_macro_store_paths()
 
         items: list[MacroLibraryItem] = []
         for path in sorted(candidates, key=lambda item: item.name.lower()):
             script = self._load_macro_file(path, show_error=False)
             if script is None:
                 continue
+            try:
+                modified_at = path.stat().st_mtime
+            except OSError:
+                continue
             created_at_sort = self._parse_created_at_sort_key(script.created_at)
             items.append(
                 MacroLibraryItem(
                     path=path,
                     script=script,
-                    modified_at=path.stat().st_mtime,
+                    modified_at=modified_at,
                     created_at_sort=created_at_sort,
                 )
             )
@@ -633,6 +660,17 @@ class MacroApp:
                 item.path.name.lower(),
             ),
         )
+
+    def _iter_macro_store_paths(self) -> list[Path]:
+        try:
+            candidates = list(self.macro_store_dir.iterdir())
+        except FileNotFoundError:
+            self.macro_store_dir.mkdir(exist_ok=True)
+            return []
+        except OSError:
+            return []
+
+        return [path for path in candidates if self._is_macro_file_path(path)]
 
     def _render_macro_list(self) -> None:
         for child in self.macro_body.winfo_children():
@@ -658,7 +696,7 @@ class MacroApp:
             tags: list[str] = []
             if self.current_path == item.path:
                 tags.append("当前")
-            if self._playing_path == item.path and (self._playing or self.player.active or self._stopping_playback):
+            if self._is_path_playing(item.path):
                 tags.append("播放中")
 
             info_parts = [
@@ -758,7 +796,7 @@ class MacroApp:
         return max(min(int(canvas_width) - 150, 440), 220)
 
     def _truncate_text_to_width(self, text: str, max_width: int, font_spec: tuple[str, ...]) -> str:
-        display_font = tkfont.Font(font=font_spec)
+        display_font = self._get_measure_font(font_spec)
         if display_font.measure(text) <= max_width:
             return text
 
@@ -771,6 +809,19 @@ class MacroApp:
         while trimmed and display_font.measure(trimmed) > available_width:
             trimmed = trimmed[:-1]
         return f"{trimmed.rstrip()}{ellipsis}"
+
+    def _get_measure_font(self, font_spec: tuple[str, ...]) -> tkfont.Font:
+        cache = getattr(self, "_measure_fonts", None)
+        if cache is None:
+            cache = {}
+            self._measure_fonts = cache
+
+        cache_key = tuple(font_spec)
+        display_font = cache.get(cache_key)
+        if display_font is None:
+            display_font = tkfont.Font(font=font_spec)
+            cache[cache_key] = display_font
+        return display_font
 
     def _sync_macro_list_layout(self) -> None:
         self._update_macro_list_view_height()
@@ -832,7 +883,7 @@ class MacroApp:
             return float("inf")
 
     def _start_macro_drag(self, _event: tk.Event[tk.Label], path: Path) -> str:
-        if self.recorder.active or self._stopping_record or self.player.active or self._playing or self._arming:
+        if self._is_macro_interaction_locked():
             return "break"
         if len(self.macro_items) <= 1:
             return "break"
@@ -928,7 +979,7 @@ class MacroApp:
             for path, script in updates:
                 suffix = path.suffix or ".txt"
                 temp_path = path.with_name(f".{path.stem}.{uuid4().hex}.tmp{suffix}")
-                save_script(temp_path, script)
+                save_script(temp_path, script, preserve_text_from=path)
                 temp_paths[path] = temp_path
 
             for path, _script in updates:
@@ -976,7 +1027,7 @@ class MacroApp:
         target_backup_path: Path | None = None
 
         try:
-            save_script(temp_path, script)
+            save_script(temp_path, script, preserve_text_from=source_path)
 
             if source_path.exists():
                 source_path.replace(source_backup_path)
@@ -1120,7 +1171,7 @@ class MacroApp:
             self._refresh_macro_list()
             return
 
-        if self.recorder.active or self._stopping_record or self.player.active or self._playing or self._arming:
+        if self._is_macro_interaction_locked():
             self._log(f"已按下快捷键 {hotkey_display}，但当前正在录制或播放，已忽略。")
             return
 
@@ -1186,12 +1237,11 @@ class MacroApp:
         return path
 
     def start_recording(self) -> None:
-        if self.recorder.active or self.player.active or self._playing or self._arming:
+        if self._is_record_start_blocked():
             return
 
         self._arming = True
-        self.status_var.set("准备开始录制")
-        self._set_phase("3", "倒计时开始，请立即切换到目标窗口。", "#b45309")
+        self._set_status_phase("准备开始录制", "3", "倒计时开始，请立即切换到目标窗口。", "#b45309")
         self._log("3 秒后开始录制，请切换到目标窗口。")
         self._set_controls()
         self._run_record_countdown(3)
@@ -1205,14 +1255,12 @@ class MacroApp:
                 self.ui_queue.put(("error", f"启动录制失败：{exc}"))
                 return
 
-            self.status_var.set("正在录制，按 Esc 停止")
-            self._set_phase("录制中", "正在捕获动作节点，按 Esc 会停止并自动保存。", "#b91c1c")
+            self._set_status_phase("正在录制，按 Esc 停止", "录制中", "正在捕获动作节点，按 Esc 会停止并自动保存。", "#b91c1c")
             self._log(f"录制已开始，按 Esc 停止并自动保存。当前屏幕：{format_display_profile()}。")
             self._set_controls()
             return
 
-        self.status_var.set(f"{remaining} 秒后开始录制")
-        self._set_phase(str(remaining), "倒计时结束后将自动开始录制。", "#b45309")
+        self._set_status_phase(f"{remaining} 秒后开始录制", str(remaining), "倒计时结束后将自动开始录制。", "#b45309")
         self.root.after(1000, lambda: self._run_record_countdown(remaining - 1))
 
     def stop_recording(self, *, trigger: str = "button") -> None:
@@ -1220,8 +1268,7 @@ class MacroApp:
             return
 
         self._stopping_record = True
-        self.status_var.set("正在停止录制")
-        self._set_phase("停止中", "正在整理录制结果并自动保存，请稍候。", "#92400e")
+        self._set_status_phase("正在停止录制", "停止中", "正在整理录制结果并自动保存，请稍候。", "#92400e")
         if trigger == "esc":
             self._log("检测到 Esc，正在停止录制并自动保存...")
         else:
@@ -1242,7 +1289,7 @@ class MacroApp:
         self.ui_queue.put(("recording_finished", script))
 
     def play_macro(self, path: Path) -> None:
-        if self.recorder.active or self._stopping_record or self.player.active or self._playing or self._arming:
+        if self._is_macro_interaction_locked():
             return
 
         script = self._load_macro_file(path, show_error=True)
@@ -1260,14 +1307,12 @@ class MacroApp:
         self._playing_path = path
         self._start_playback_abort_listener()
 
-        self.status_var.set("正在播放")
-        self._set_phase("播放中", "正在回放宏，按 Esc 可以直接中断播放。", "#1d4ed8")
+        self._set_status_phase("正在播放", "播放中", "正在回放宏，按 Esc 可以直接中断播放。", "#1d4ed8")
         self._log(
             f"开始播放宏：{script.name}，循环次数：{self._format_loops(script.default_loops)}，"
             f"播放速度：{script.default_speed:g}，当前屏幕：{format_display_profile()}。"
         )
         self._refresh_macro_list()
-        self._set_controls()
 
         threading.Thread(
             target=self._playback_worker,
@@ -1291,15 +1336,13 @@ class MacroApp:
 
         self._stopping_playback = True
         self._stop_playback_abort_listener()
-        self.status_var.set("正在停止播放")
-        self._set_phase("停止中", "正在停止回放，请稍候。", "#92400e")
+        self._set_status_phase("正在停止播放", "停止中", "正在停止回放，请稍候。", "#92400e")
         if trigger == "esc":
             self._log("检测到 Esc，正在中断播放...")
         else:
             self._log("已请求停止播放。")
         self.player.stop()
         self._refresh_macro_list()
-        self._set_controls()
 
     def _start_playback_abort_listener(self) -> None:
         self._stop_playback_abort_listener()
@@ -1503,7 +1546,7 @@ class MacroApp:
             self._log(f"已打开脚本编辑器：{path.name}")
 
         def delete_macro() -> None:
-            if self._playing_path == path and (self._playing or self.player.active or self._stopping_playback):
+            if self._is_path_playing(path):
                 messagebox.showwarning("无法删除", "该宏正在播放，请先停止播放再删除。", parent=dialog)
                 return
 
@@ -1522,8 +1565,7 @@ class MacroApp:
                 return
 
             if self.current_path == path:
-                self.current_path = None
-                self.current_script = None
+                self._clear_current_selection()
 
             self._log(f"已删除宏：{path.name}")
             self._refresh_macro_list()
