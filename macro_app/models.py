@@ -53,7 +53,7 @@ class MacroScript:
             global_hotkey=str(data.get("global_hotkey", "") or "").strip(),
             custom_order=_parse_optional_int(data.get("custom_order")),
             events=[MacroEvent.from_dict(item) for item in data.get("events", [])],
-            version=int(data.get("version", 1)),
+            version=int(data.get("version", 4)),
         )
 
 

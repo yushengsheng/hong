@@ -47,7 +47,8 @@ class MacroRecorder:
         self._mouse_listener: mouse.Listener | None = None
         self._keyboard_listener: keyboard.Listener | None = None
         self._lock = threading.Lock()
-        self._events: list[MacroEvent] = []
+        self._events: list[tuple[int, MacroEvent]] = []
+        self._next_event_sequence = 0
         self._start_time = 0.0
         self._recording_bounds: ScreenBounds | None = None
         self._pressed_buttons: dict[str, dict[str, object]] = {}
@@ -69,25 +70,38 @@ class MacroRecorder:
 
         with self._lock:
             self._events = []
+            self._next_event_sequence = 0
 
         self._pressed_buttons = {}
         self._pressed_modifiers = set()
         self._recording_bounds = get_screen_bounds()
         self._start_time = time.perf_counter()
 
-        self._mouse_listener = mouse.Listener(
+        mouse_listener = mouse.Listener(
             on_move=self._on_move,
             on_click=self._on_click,
             on_scroll=self._on_scroll,
         )
-        self._keyboard_listener = keyboard.Listener(
+        keyboard_listener = keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,
         )
 
+        try:
+            mouse_listener.start()
+            keyboard_listener.start()
+        except Exception:
+            self._close_listener(keyboard_listener)
+            self._close_listener(mouse_listener)
+            self._pressed_buttons = {}
+            self._pressed_modifiers = set()
+            self._recording_bounds = None
+            self._active = False
+            raise
+
+        self._mouse_listener = mouse_listener
+        self._keyboard_listener = keyboard_listener
         self._active = True
-        self._mouse_listener.start()
-        self._keyboard_listener.start()
 
     def stop(self) -> MacroScript:
         if not self._active:
@@ -95,21 +109,23 @@ class MacroRecorder:
 
         self._active = False
 
-        if self._mouse_listener is not None:
-            self._mouse_listener.stop()
-            self._mouse_listener.join(timeout=1.0)
-            self._mouse_listener = None
+        self._close_listener(self._mouse_listener)
+        self._mouse_listener = None
 
-        if self._keyboard_listener is not None:
-            self._keyboard_listener.stop()
-            self._keyboard_listener.join(timeout=1.0)
-            self._keyboard_listener = None
+        self._close_listener(self._keyboard_listener)
+        self._keyboard_listener = None
 
         self._pressed_buttons = {}
         self._pressed_modifiers = set()
 
         with self._lock:
-            events = list(self._events)
+            events = [
+                event
+                for _sequence, event in sorted(
+                    self._events,
+                    key=lambda item: (item[1].time_offset, item[0]),
+                )
+            ]
 
         name = f"macro-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         bounds = self._recording_bounds or get_screen_bounds()
@@ -140,7 +156,24 @@ class MacroRecorder:
             payload=payload,
         )
         with self._lock:
-            self._events.append(event)
+            sequence = self._next_event_sequence
+            self._next_event_sequence += 1
+            self._events.append((sequence, event))
+
+    @staticmethod
+    def _close_listener(listener: object | None) -> None:
+        if listener is None:
+            return
+
+        try:
+            listener.stop()
+        except Exception:
+            pass
+
+        try:
+            listener.join(timeout=1.0)
+        except Exception:
+            pass
 
     def _build_pointer_payload(self, x: int, y: int, **extra: object) -> dict[str, object]:
         bounds = self._recording_bounds or get_screen_bounds()

@@ -53,11 +53,17 @@ class MacroPlayer:
         self._pressed_keys.clear()
         self._pressed_buttons.clear()
         completed = True
+        has_events = bool(script.events)
 
         try:
             remaining_loops = loops
             while not self._stop_event.is_set():
-                self._play_once(script, speed=speed)
+                if has_events:
+                    self._play_once(script, speed=speed)
+                elif loops == 0 and self._wait_or_stop(0.05):
+                    completed = False
+                    break
+
                 if self._stop_event.is_set():
                     completed = False
                     break

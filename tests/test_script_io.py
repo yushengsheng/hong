@@ -75,6 +75,7 @@ class ScriptIoTests(unittest.TestCase):
         script = MacroScript.from_dict(payload)
         self.assertTrue(script.created_at)
         self.assertEqual(script.name, "legacy")
+        self.assertEqual(script.version, 4)
 
     def test_text_round_trip_preserves_modifier_function_key_sequence(self) -> None:
         with TemporaryDirectory() as tmp_dir:

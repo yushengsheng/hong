@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import threading
 import unittest
 
 from pynput import mouse as pynput_mouse
 
 from macro_app.display import ScreenBounds
-from macro_app.models import MacroEvent
+from macro_app.models import MacroEvent, MacroScript
 from macro_app.player import MacroPlayer
 
 
@@ -206,6 +207,39 @@ class MacroPlayerTests(unittest.TestCase):
             player._mouse.actions,
             [("move", (10, 20))],
         )
+
+    def test_empty_infinite_macro_waits_for_stop_instead_of_busy_spinning(self) -> None:
+        player = MacroPlayer()
+        script = MacroScript(
+            name="empty",
+            created_at="2026-03-11T10:00:00+00:00",
+            screen_size=(1, 1),
+            events=[],
+        )
+        wait_calls: list[float] = []
+        results: list[bool] = []
+
+        def fake_wait(timeout: float) -> bool:
+            wait_calls.append(timeout)
+            player.stop()
+            return True
+
+        player._wait_or_stop = fake_wait  # type: ignore[method-assign]
+
+        worker = threading.Thread(
+            target=lambda: results.append(player.play(script, loops=0, speed=1.0)),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=0.5)
+
+        if worker.is_alive():
+            player.stop()
+            worker.join(timeout=0.5)
+            self.fail("Empty infinite macro playback should wait for stop instead of spinning forever.")
+
+        self.assertEqual(results, [False])
+        self.assertEqual(wait_calls, [0.05])
 
 
 def _key_name(key: object) -> str:
